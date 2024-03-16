@@ -25,6 +25,15 @@ def show_time(seconds):
         minutes, seconds = div_remainder(seconds, 60)
         return "{}h,{}m,{}s".format(hours, minutes, seconds)
 
+def red_blcks(input_shape):
+    count = 0
+    lesser = min(input_shape[2], input_shape[3])
+    while(lesser > 4):
+        lesser /= 2
+        # print(lesser)
+        count+=1
+    print('Reduction Blocks: ', count) 
+    return count
 
 class Conv(nn.Module):
     
@@ -59,13 +68,14 @@ class SepConv(nn.Module):
 
 class NetworkMix(nn.Module):
 
-  def __init__(self, C, num_classes, layers, mixnet_code, k_size, start_layer):
+  def __init__(self, C, metadata, layers, mixnet_code, k_size):
+    start_layer = metadata['input_shape'][1]
+    num_classes = metadata['num_classes']
     super(NetworkMix, self).__init__()
     self._layers = layers
     
-    # stem_multiplier = 2
-    # C_curr = stem_multiplier*C
-    C_curr = start_layer
+    stem_multiplier = 0.25
+    C_curr = int(stem_multiplier*C)
     self.stem = nn.Sequential(
       nn.Conv2d(start_layer, C_curr, 3, padding=1, bias=False),
       nn.BatchNorm2d(C_curr)
@@ -75,10 +85,15 @@ class NetworkMix(nn.Module):
     
     self.mixlayers = nn.ModuleList()
     reduction_prev = False
+    '''Number of reduction blocks return from the block calculation function
+    Genrate the list of of the reduction layers by using the totall nmber of layer
+    '''
+    num_reduction_blocks = red_blcks(metadata['input_shape'])
+    reduction_list = [i * layers // (num_reduction_blocks+1) for i in range(1, num_reduction_blocks+1)]
     
     for i in range(layers):
-      if i in [layers//3, 2*layers//3]:
-        C_curr *= 2
+      if i in reduction_list:
+        C_curr = C * (reduction_list.index(i)+2)
         reduction = True
       else:
         reduction = False
@@ -107,13 +122,17 @@ class NetworkMix(nn.Module):
     self.classifier = nn.Linear(C_prev, num_classes)
 
   def forward(self, x):
-    
+    print("Input shape:", x.shape)
+
     x = self.stem(x)
-    
+    print("Stem output shape:", x.shape)
+
     for i, mixlayer in enumerate(self.mixlayers):
-      x = mixlayer(x)
-        
+        x = mixlayer(x)
+        print(f"MixLayer {i+1} output shape:", x.shape)
+
     out = self.global_pooling(x)
-    logits = self.classifier(out.view(out.size(0),-1))
-    
+    print("Global pooling output shape:", out.shape)
+    logits = self.classifier(out.view(out.size(0), -1))
+    print("Logits output shape:", logits.shape)
     return logits
