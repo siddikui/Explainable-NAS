@@ -5,7 +5,8 @@ The starting kit contains the following:
 * `main.py`: The main pipeline. This will load each dataset, pass it through pipeline, and then produce test predictions
 * `nas.py` : The file which build the pytorch model
 * `trainer.py` : This file trains the model
-* `data_processor.py` : Will process the dataset
+* `data_processor.py` : This filee will process the dataset
+* `helper.py` : This file will containes the extra function to keep the code clean in mian files
 
 
 # Datasets
