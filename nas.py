@@ -38,12 +38,8 @@ class NAS:
         layers = 7
         curr_arch_ops = [0,0,0,0,0,0,0]
         curr_arch_kernel = [3,3,3,3,3,3,3]
-        model = NetworkMix(channels, self.metadata['num_classes'], layers, curr_arch_ops,
-         curr_arch_kernel, self.metadata['input_shape'][1])
-        # load resnet18 model
-        # model = torchvision.models.resnet18(pretrained=False)
-
-        # # reshape it to the data
-        # model.conv1 = nn.Conv2d(self.metadata['input_shape'][1], 64, kernel_size=(3, 3), stride=1, padding=1)
-        # model.fc = nn.Linear(model.fc.in_features, num_classes, bias=True)
+        model = NetworkMix(channels, self.metadata, layers, curr_arch_ops,
+         curr_arch_kernel)
+        print(model)
+       
         return model
