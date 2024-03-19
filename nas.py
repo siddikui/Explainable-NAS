@@ -98,14 +98,14 @@ class NAS:
         runclock = Clock(total_runtime_seconds)
 
         target_acc= 100
-        min_width= 16
+        min_width= 8
         max_width= 128
         width_resolution = 8
         min_depth= 5
         max_depth= 100
         ch_drop_tolerance = 0.05
         target_acc_tolerance = 0.10
-        channels = min_width 
+        channels = 16 
         layers = min_depth
         f_epochs = 0
         ch_break_tolerance = 3
@@ -113,8 +113,8 @@ class NAS:
         dp_add_tolerance = 0.10
         add_epochs_w = 3
         add_epochs = 1
-        epochs = 1
-        
+        epochs = 10
+
         # Initialize
         curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
         curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
@@ -153,7 +153,7 @@ class NAS:
             else:
             # prepare next candidate architecture.  
                 layers += 1
-
+            print("--------------",layers)
             next_arch_ops = np.zeros((layers,), dtype=int)
             next_arch_kernel = 3*np.ones((layers,), dtype=int)
             model = NetworkMix(channels,self.metadata, layers, next_arch_ops,
@@ -246,7 +246,7 @@ class NAS:
             logging.info("Model Depth %s Model Width %s", f_layers, channels)
             logging.info("Model Layers %s Model Kernels %s", curr_arch_ops, curr_arch_kernel)
             logging.info('Total number of epochs %f', epochs)
-            logging.info("Model Parameters = %fMB", utils.count_parameters_in_MB(model))
+            logging.info("Model Parameters = %fMB", general_num_params(model))
             logging.info('Training Model...')
             logging.info("Width Fail Count %s", width_fail_count)
             # train and test candidate architecture.
