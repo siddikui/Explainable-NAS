@@ -4,7 +4,6 @@ from sklearn.metrics import accuracy_score
 import torch
 from torch import optim
 import torch.nn as nn
-
 from helpers import show_time
 
 class Trainer:
@@ -75,7 +74,6 @@ class Trainer:
             ))
         print("  Total runtime: {}".format(show_time(time.time() - t_start)))
         return self.model
-
     # print out the model's accuracy over the valid dataset
     # (this isn't necessary for a submission, but I like it for my training logs)
     def evaluate(self):
