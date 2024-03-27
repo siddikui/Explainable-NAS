@@ -1,6 +1,22 @@
 import math
 import torch
 import torch.nn as nn
+import time
+import numpy as np
+# === MODEL ANALYSIS ===================================================================================================
+def general_num_params(model):
+    # return number of differential parameters of input model
+    return sum([np.prod(p.size()) for p in filter(lambda p: p.requires_grad, model.parameters())])
+
+# keep a counter of available time
+class Clock:
+    def __init__(self, time_available):
+        self.start_time =  time.time()
+        self.total_time = time_available
+
+    def check(self):
+        return self.total_time + self.start_time - time.time()
+
 
 # use this however you need\
 
@@ -99,7 +115,6 @@ class NetworkMix(nn.Module):
         reduction = False
         
       stride = 2 if reduction else 1
-      
       if k_size[i]==3:
         pad=1
       elif k_size[i]==5: 
@@ -122,17 +137,18 @@ class NetworkMix(nn.Module):
     self.classifier = nn.Linear(C_prev, num_classes)
 
   def forward(self, x):
-    print("Input shape:", x.shape)
+    # print("Input shape:", x.shape)
 
     x = self.stem(x)
-    print("Stem output shape:", x.shape)
+    # print("Stem output shape:", x.shape)
 
     for i, mixlayer in enumerate(self.mixlayers):
         x = mixlayer(x)
-        print(f"MixLayer {i+1} output shape:", x.shape)
+        # print(f"MixLayer {i+1} output shape:", x.shape)
 
     out = self.global_pooling(x)
-    print("Global pooling output shape:", out.shape)
+    # print("Global pooling output shape:", out.shape)
     logits = self.classifier(out.view(out.size(0), -1))
-    print("Logits output shape:", logits.shape)
+    # print("Logits output shape:", logits.shape)
     return logits
+
