@@ -10,7 +10,11 @@ import time
 
 total_runtime_hours = 2
 total_runtime_seconds = total_runtime_hours * 60 * 60
-
+log_format = '%(asctime)s %(message)s'
+logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=log_format, datefmt='%m/%d %I:%M:%S %p')
+fh = logging.FileHandler(os.path.join( 'Searchlog.txt'))
+fh.setFormatter(logging.Formatter(log_format))
+logging.getLogger().addHandler(fh)
 class NAS:
     """
     ====================================================================================================================
@@ -34,6 +38,7 @@ class NAS:
         self.valid_loader = valid_loader
         self.metadata = metadata
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device('cpu')
+        
 
     def train(self,epochs,model):
         self.model = model
@@ -64,13 +69,13 @@ class NAS:
 
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
-            print("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
+            logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
                 epoch + 1, self.epochs,
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
-        print("  Total runtime: {}".format(show_time(time.time() - t_start)))
-        return train_acc, valid_acc
+        logging.info("  Total runtime: {}".format(show_time(time.time() - t_start)))
+        return train_acc*100, valid_acc*100
 
 
     def evaluate(self):
@@ -86,11 +91,7 @@ class NAS:
 
     def search_depth_and_width(self):
 
-        log_format = '%(asctime)s %(message)s'
-        logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=log_format, datefmt='%m/%d %I:%M:%S %p')
-        fh = logging.FileHandler(os.path.join( 'Searchlog.txt'))
-        fh.setFormatter(logging.Formatter(log_format))
-        logging.getLogger().addHandler(fh)
+        
 
         logging.info('#############################################################################')
         logging.info('INITIALIZING DEPTH AND WIDTH SEARCH...')
@@ -98,9 +99,9 @@ class NAS:
         runclock = Clock(total_runtime_seconds)
 
         target_acc= 100
-        min_width= 8
+        min_width= 16
         max_width= 128
-        width_resolution = 8
+        width_resolution = 16
         min_depth= 5
         max_depth= 100
         ch_drop_tolerance = 0.05
@@ -111,9 +112,9 @@ class NAS:
         ch_break_tolerance = 3
         dp_break_tolerance = 1
         dp_add_tolerance = 0.10
-        add_epochs_w = 3
-        add_epochs = 1
-        epochs = 10
+        add_epochs_w = 0
+        add_epochs = 0
+        epochs = 1
 
         # Initialize
         curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
@@ -121,39 +122,36 @@ class NAS:
 
         curr_arch_train_acc = next_arch_train_acc = 0.0
         curr_arch_test_acc = next_arch_test_acc = 0.0
-
-        logging.info('RUNNING MACRO SEARCH FIRST...')
+        logging.info('RUNNING MACRO SEARCH FIRST on the dataset %s', self.metadata['codename'])
 
         model = NetworkMix(channels,self.metadata, layers, curr_arch_ops,
                 curr_arch_kernel)  
-        model = model.cuda()
         
         logging.info('MODEL DETAILS')
         logging.info("Model Depth %s Model Width %s", layers, channels)
         logging.info("Model Layers %s Model Kernels %s", curr_arch_ops, curr_arch_kernel)
         logging.info('Training epochs %s', epochs)
-        logging.info("Model Parameters = %fMB", general_num_params(model))
+        logging.info("Model Parameters = %f", general_num_params(model))
         logging.info('Training Model...')
         # train model using your Trainer
         print("\n=== Training ===")
         print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
-        next_arch_train_acc, next_arch_test_acc  = self.train(epochs, model)
+        curr_arch_train_acc, curr_arch_test_acc  = self.train(epochs, model)
 
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
         # Search depth
         depth_fail_count = 0
         channels_up = False
-        while ((curr_arch_test_acc < (target_acc - target_acc_tolerance)) and (layers <= min_depth) and (layers != max_depth)):
+        while ((curr_arch_test_acc < (target_acc - target_acc_tolerance)) and (layers != max_depth)):
             
             # The possibility exists if trained for too long.
-            if (curr_arch_train_acc == 100):
+            if (curr_arch_train_acc == 99.5):
                 break;  
             
             else:
             # prepare next candidate architecture.  
                 layers += 1
-            print("--------------",layers)
             next_arch_ops = np.zeros((layers,), dtype=int)
             next_arch_kernel = 3*np.ones((layers,), dtype=int)
             model = NetworkMix(channels,self.metadata, layers, next_arch_ops,
@@ -165,7 +163,7 @@ class NAS:
             logging.info("Model Depth %s Model Width %s", layers, channels)
             logging.info("Model Layers %s Model Kernels %s", next_arch_ops, next_arch_kernel)
             logging.info('Total number of epochs %s', epochs)
-            logging.info("Model Parameters = %fMB", general_num_params(model))
+            logging.info("Model Parameters = %f", general_num_params(model))
             logging.info("Depth Fail Count %s", depth_fail_count)
             logging.info('Training Model...')
             # train model using your Trainer
@@ -191,8 +189,8 @@ class NAS:
                                 
             elif((next_arch_test_acc < curr_arch_test_acc + dp_add_tolerance) and ((depth_fail_count != dp_break_tolerance))):
                 depth_fail_count += 1
-                layers -= 1
-                epochs = epochs + add_epochs
+                # layers -= 1
+                # epochs = epochs + add_epochs
                 logging.info('Increasing Epoch in DEPTH block...')
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
@@ -200,7 +198,7 @@ class NAS:
                 
             elif(channels != max_width):
                 if not channels_up:
-                    layers -= 2
+                    layers -= 1
                     channels += int(width_resolution/2)
                     channels_up = True
                     logging.info('Increasing CHANNELS in WIDTH block...')
@@ -208,7 +206,7 @@ class NAS:
                     logging.info('Increasing Epoch in WIDTH block...')
                     epochs = epochs + add_epochs
                     channels_up = False
-                    layers -= 1
+                    # layers -= 1
                         
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
@@ -237,7 +235,7 @@ class NAS:
             # prepare next candidate architecture.
             channels = channels - int(width_resolution/4)
             # Although these do not change.
-            model = NetworkMix(channels,self.metadata, layers, curr_arch_ops,
+            model = NetworkMix(channels,self.metadata, f_layers, curr_arch_ops,
                 curr_arch_kernel)      
             epochs = epochs + add_epochs_w
 
@@ -246,7 +244,7 @@ class NAS:
             logging.info("Model Depth %s Model Width %s", f_layers, channels)
             logging.info("Model Layers %s Model Kernels %s", curr_arch_ops, curr_arch_kernel)
             logging.info('Total number of epochs %f', epochs)
-            logging.info("Model Parameters = %fMB", general_num_params(model))
+            logging.info("Model Parameters = %f", general_num_params(model))
             logging.info('Training Model...')
             logging.info("Width Fail Count %s", width_fail_count)
             # train and test candidate architecture.
@@ -278,7 +276,8 @@ class NAS:
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
                 break; 
-
+                
+        logging.info('Discovered Final Depth %s', f_layers)
         logging.info('Discovered Final Width %s', f_channels)
         logging.info('Discovered Final Epochs %s', f_epochs)
         logging.info('END OF WIDTH SEARCH...')  
