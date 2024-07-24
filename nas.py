@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score
 import numpy as np
 import time
 
-total_runtime_hours = 2
+total_runtime_hours = 24
 total_runtime_seconds = total_runtime_hours * 60 * 60
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=log_format, datefmt='%m/%d %I:%M:%S %p')
@@ -114,7 +114,7 @@ class NAS:
         dp_add_tolerance = 0.10
         add_epochs_w = 0
         add_epochs = 0
-        epochs = 1
+        epochs = 5
 
         # Initialize
         curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
@@ -285,7 +285,7 @@ class NAS:
         logging.info('#############################################################################')
         logging.info('')  
 
-        return curr_arch_ops, curr_arch_kernel, f_epochs, f_channels, f_layers, curr_arch_train_acc, curr_arch_test_acc
+        return curr_arch_ops, curr_arch_kernel, f_channels, f_layers
 
     """
     ====================================================================================================================
@@ -296,8 +296,11 @@ class NAS:
     """
     def search(self):
        
-        curr_arch_ops, curr_arch_kernel, f_epochs, f_channels, f_layers, curr_arch_train_acc, curr_arch_test_acc = self.search_depth_and_width()
+        curr_arch_ops, curr_arch_kernel, f_channels, f_layers = self.search_depth_and_width()
+        # curr_arch_ops = [0, 0, 0 ,0, 0 ,0, 0]
+        # curr_arch_kernel = [3, 3, 3, 3, 3, 3, 3]
+        # f_channels = 16
+        # f_layers = 7
         model = NetworkMix(f_channels, self.metadata, f_layers, curr_arch_ops,
          curr_arch_kernel)
-        
         return model
