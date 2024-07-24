@@ -27,12 +27,12 @@ def load_dataset_metadata(dataset_path):
 
 # load dataset from file
 def load_datasets(data_path, truncate):
-    data_path = 'datasets/'+data_path
-    train_x = np.load(os.path.join(data_path,'train_x.npy'))
-    train_y = np.load(os.path.join(data_path,'train_y.npy'))
-    valid_x = np.load(os.path.join(data_path,'valid_x.npy'))
-    valid_y = np.load(os.path.join(data_path,'valid_y.npy'))
-    test_x = np.load(os.path.join(data_path,'test_x.npy'))
+    data_path = 'datasets/' + data_path
+    train_x = np.load(os.path.join(data_path, 'train_x.npy'))
+    train_y = np.load(os.path.join(data_path, 'train_y.npy'))
+    valid_x = np.load(os.path.join(data_path, 'valid_x.npy'))
+    valid_y = np.load(os.path.join(data_path, 'valid_y.npy'))
+    test_x = np.load(os.path.join(data_path, 'test_x.npy'))
     metadata = load_dataset_metadata(data_path)
 
     if truncate:
@@ -71,11 +71,21 @@ def show_time(seconds):
 # keep a counter of available time
 class Clock:
     def __init__(self, time_available):
-        self.start_time =  time.time()
+        self.start_time = time.time()
         self.total_time = time_available
 
     def check(self):
         return self.total_time + self.start_time - time.time()
+
+    def log_remaining_time(self):
+        remaining_time = self.check()
+        print(f"Remaining time: {show_time(remaining_time)}")
+        return remaining_time
+
+    def log_iteration_time(self, start_iteration_time):
+        iteration_time = time.time() - start_iteration_time
+        print(f"Iteration time: {show_time(iteration_time)}")
+        return iteration_time
 
 
 # === MODEL ANALYSIS ===================================================================================================
@@ -87,7 +97,7 @@ def general_num_params(model):
 # === MAIN =============================================================================================================
 # the available runtime will change at various stages of the competition, but feel free to change for local tests
 # note, this is approximate, your runtime will be controlled externally by our server
-total_runtime_hours = 2
+total_runtime_hours = 24
 total_runtime_seconds = total_runtime_hours * 60 * 60
 
 if __name__ == '__main__':
@@ -95,22 +105,26 @@ if __name__ == '__main__':
     try:
         # print main header
         print("=" * 75)
-        print("="*13 + "    Your Unseen Data 2024 Submission is running     " + "="*13)
-        print("="*75)
+        print("=" * 13 + "    Your Unseen Data 2024 Submission is running     " + "=" * 13)
+        print("=" * 75)
 
         # start tracking submission runtime
         runclock = Clock(total_runtime_seconds)
 
         # iterate over datasets in the datasets directory
         for dataset in os.listdir("datasets"):
+            # log starting time remaining
+            start_remaining_time = runclock.log_remaining_time()
+            start_iteration_time = time.time()
+
             # load and display data info
             (train_x, train_y), (valid_x, valid_y), (test_x), metadata = load_datasets(dataset, truncate=False)
             metadata['time_remaining'] = runclock.check()
             this_dataset_start_time = time.time()
 
-            print("="*10 + " Dataset {:^10} ".format(metadata['codename']) + "="*45)
+            print("=" * 10 + " Dataset {:^10} ".format(metadata['codename']) + "=" * 45)
             print("  Metadata:")
-            [print("   - {:<20}: {}".format(k, v)) for k,v in metadata.items()]
+            [print("   - {:<20}: {}".format(k, v)) for k, v in metadata.items()]
 
             # perform data processing/augmentation/etc using your DataProcessor
             print("\n=== Processing Data ===")
@@ -143,10 +157,22 @@ if __name__ == '__main__':
             print("\n=== Predicting ===")
             print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
             predictions = trainer.predict(test_loader)
-            run_data = {'Runtime': float(np.round(time.time()-this_dataset_start_time, 2)), 'Params': model_params}
+            run_data = {'Runtime': float(np.round(time.time() - this_dataset_start_time, 2)), 'Params': model_params}
             with open("predictions/{}_stats.pkl".format(metadata['codename']), "wb") as f:
                 pkl.dump(run_data, f)
             np.save('predictions/{}.npy'.format(metadata['codename']), predictions)
             print()
+
+            # log ending time remaining and iteration time
+            end_remaining_time = runclock.log_remaining_time()
+            iteration_time = runclock.log_iteration_time(start_iteration_time)
+
+            # optionally, you can store these times in a log file
+            with open("timing_log.txt", "a") as log_file:
+                log_file.write(f"Dataset: {metadata['codename']}\n")
+                log_file.write(f"Start Remaining Time: {show_time(start_remaining_time)}\n")
+                log_file.write(f"End Remaining Time: {show_time(end_remaining_time)}\n")
+                log_file.write(f"Iteration Time: {show_time(iteration_time)}\n\n")
+
     except Exception as e:
         print(e)
