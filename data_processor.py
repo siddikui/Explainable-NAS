@@ -87,7 +87,7 @@ class DataProcessor:
         valid_ds = Dataset(self.valid_x, self.valid_y, transform=train_ds.transform)
         test_ds = Dataset(self.test_x, None, transform=train_ds.transform)
 
-        batch_size = 8
+        batch_size = 64
 
         # build data loaders
         train_loader = torch.utils.data.DataLoader(train_ds,

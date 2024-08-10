@@ -43,7 +43,7 @@ class NAS:
     def train(self,epochs,model):
         self.model = model
         self.epochs = epochs
-        self.optimizer = optim.SGD(model.parameters(), lr=.01, momentum=.9, weight_decay=3e-4)
+        self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs)
 
@@ -90,47 +90,35 @@ class NAS:
 
 
     def search_depth_and_width(self):
-
         
-
-        logging.info('#############################################################################')
-        logging.info('INITIALIZING DEPTH AND WIDTH SEARCH...')
 
         runclock = Clock(total_runtime_seconds)
 
         target_acc= 100
         min_width= 16
         max_width= 128
-        width_resolution = 16
-        min_depth= 5
-        max_depth= 100
-        ch_drop_tolerance = 0.05
-        target_acc_tolerance = 0.10
-        channels = 16 
+        width_resolution = 8
+        min_depth= 8
+        max_depth= 25
+        max_epochs = 20
+
+        channels = f_channels = 16 
         layers = min_depth
+        
+        add_epochs = 1
+        epochs = 1
         f_epochs = 0
-        ch_break_tolerance = 3
-        dp_break_tolerance = 1
-        dp_add_tolerance = 0.10
-        add_epochs_w = 0
-        add_epochs = 0
-        epochs = 5
 
         # Initialize
         curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
         curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
-
         curr_arch_train_acc = next_arch_train_acc = 0.0
         curr_arch_test_acc = next_arch_test_acc = 0.0
-        logging.info('RUNNING MACRO SEARCH FIRST on the dataset %s', self.metadata['codename'])
 
-        model = NetworkMix(channels,self.metadata, layers, curr_arch_ops,
-                curr_arch_kernel)  
-        
-        logging.info('MODEL DETAILS')
-        logging.info("Model Depth %s Model Width %s", layers, channels)
-        logging.info("Model Layers %s Model Kernels %s", curr_arch_ops, curr_arch_kernel)
-        logging.info('Training epochs %s', epochs)
+        logging.info('RUNNING SEARCH on %s', self.metadata['codename'])
+        model = NetworkMix(channels,self.metadata, layers, curr_arch_ops, curr_arch_kernel)          
+        logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
+
         logging.info("Model Parameters = %f", general_num_params(model))
         logging.info('Training Model...')
         # train model using your Trainer
@@ -140,18 +128,46 @@ class NAS:
 
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
-        # Search depth
-        depth_fail_count = 0
-        channels_up = False
-        while ((curr_arch_test_acc < (target_acc - target_acc_tolerance)) and (layers != max_depth)):
+        # SEARCH MODEL
+        
+        layers_up = channels_up = epochs_up = True
+
+
+        while (curr_arch_test_acc < target_acc):
+            torch.cuda.empty_cache()
+
             
             # The possibility exists if trained for too long.
-            if (curr_arch_train_acc == 99.5):
+            if (curr_arch_train_acc >= 99):
                 break;  
             
-            else:
             # prepare next candidate architecture.  
+
+            if ((layers >= max_depth and channels >=max_width) or epochs >= max_epochs):
+                break;
+
+            if layers_up and layers < max_depth: 
+                
                 layers += 1
+                layers_up = False
+                channels_up = True
+                epochs_up = True
+            
+            elif channels_up and channels < max_width:
+                
+                channels += int(width_resolution/2)
+                channels_up = False
+                layers_up = False
+                epochs_up = True 
+            
+            elif epochs_up and epochs < max_epochs:
+                
+                epochs = epochs + add_epochs
+                epochs_up = False
+                layers_up = True
+                channels_up = True
+
+
             next_arch_ops = np.zeros((layers,), dtype=int)
             next_arch_kernel = 3*np.ones((layers,), dtype=int)
             model = NetworkMix(channels,self.metadata, layers, next_arch_ops,
@@ -159,12 +175,10 @@ class NAS:
                         
             logging.info('#############################################################################')
             logging.info('Moving to Next Candidate Architecture...')
-            logging.info('MODEL DETAILS')
-            logging.info("Model Depth %s Model Width %s", layers, channels)
-            logging.info("Model Layers %s Model Kernels %s", next_arch_ops, next_arch_kernel)
-            logging.info('Total number of epochs %s', epochs)
+
+            logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
             logging.info("Model Parameters = %f", general_num_params(model))
-            logging.info("Depth Fail Count %s", depth_fail_count)
+
             logging.info('Training Model...')
             # train model using your Trainer
             print("\n=== Training ===")
@@ -175,7 +189,7 @@ class NAS:
             
             # As long as we get significant improvement by increasing depth.
             
-            if (next_arch_test_acc >= curr_arch_test_acc + dp_add_tolerance):
+            if (next_arch_test_acc > curr_arch_test_acc + 1):
                 # update current architecture.
                 depth_fail_count = 0
                 curr_arch_ops = next_arch_ops
@@ -185,102 +199,22 @@ class NAS:
                 curr_arch_test_acc = next_arch_test_acc
                 f_channels = channels
                 f_epochs = epochs
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
-                                
-            elif((next_arch_test_acc < curr_arch_test_acc + dp_add_tolerance) and ((depth_fail_count != dp_break_tolerance))):
-                depth_fail_count += 1
-                # layers -= 1
-                # epochs = epochs + add_epochs
-                logging.info('Increasing Epoch in DEPTH block...')
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
-                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
-                continue
-                
-            elif(channels != max_width):
-                if not channels_up:
-                    layers -= 1
-                    channels += int(width_resolution/2)
-                    channels_up = True
-                    logging.info('Increasing CHANNELS in WIDTH block...')
-                else: 
-                    logging.info('Increasing Epoch in WIDTH block...')
-                    epochs = epochs + add_epochs
-                    channels_up = False
-                    # layers -= 1
-                        
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
+                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
             else:
-                logging.info('INCREASING CHANNELS REPEAT...')
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
+                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
-                break
+                continue
         # Search width
         # During width search lenght of curr_arch_ops and curr_arch_kernel shall not change but only channels.
 
         f_layers = len(curr_arch_ops) # discovered final number of layers
-        logging.info('Discovered Final Depth %s', f_layers)
-        logging.info('Epochs so far %s', f_epochs)
-        logging.info('END OF DEPTH SEARCH...')
-        best_arch_test_acc = curr_arch_test_acc
-        best_arch_train_acc = curr_arch_train_acc
-        logging.info('#############################################################################')
-        logging.info('#############################################################################')
-        logging.info('')
-        logging.info('RUNNING WIDTH SEARCH NOW...') 
 
-        channels = f_channels
-        width_fail_count = 0
-        while (channels > min_width):
-            # prepare next candidate architecture.
-            channels = channels - int(width_resolution/4)
-            # Although these do not change.
-            model = NetworkMix(channels,self.metadata, f_layers, curr_arch_ops,
-                curr_arch_kernel)      
-            epochs = epochs + add_epochs_w
 
-            logging.info('Moving to Next Candidate Architecture...')
-            logging.info('MODEL DETAILS')
-            logging.info("Model Depth %s Model Width %s", f_layers, channels)
-            logging.info("Model Layers %s Model Kernels %s", curr_arch_ops, curr_arch_kernel)
-            logging.info('Total number of epochs %f', epochs)
-            logging.info("Model Parameters = %f", general_num_params(model))
-            logging.info('Training Model...')
-            logging.info("Width Fail Count %s", width_fail_count)
-            # train and test candidate architecture.
-            # train model using your Trainer
-            print("\n=== Training ===")
-            print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
-            next_arch_train_acc, next_arch_test_acc  = self.train(epochs, model)
-
-            logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
-
-            if (next_arch_test_acc >= (curr_arch_test_acc - 0.0)):
-
-                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
-                curr_arch_train_acc = next_arch_train_acc
-                curr_arch_test_acc = next_arch_test_acc
-             
-                f_channels = channels 
-                f_epochs = epochs
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
-                width_fail_count = 0
-            elif (width_fail_count != ch_break_tolerance):
-                width_fail_count += 1
-                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
-
-                continue
-            else:
-                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
-                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
-
-                break; 
                 
         logging.info('Discovered Final Depth %s', f_layers)
         logging.info('Discovered Final Width %s', f_channels)
         logging.info('Discovered Final Epochs %s', f_epochs)
-        logging.info('END OF WIDTH SEARCH...')  
         logging.info('#############################################################################')
         logging.info('#############################################################################')
         logging.info('')  

@@ -4,7 +4,7 @@ import numpy as np
 import pickle as pkl
 import os
 import time
-
+import random
 import torch
 from torch.utils.data import RandomSampler
 
@@ -13,8 +13,18 @@ from data_processor import DataProcessor
 from trainer import Trainer
 
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 # === DATA LOADING HELPERS =============================================================================================
 # find the dataset filepaths
+
+
 def get_dataset_paths(data_dir):
     paths = sorted([os.path.join(data_dir, d) for d in os.listdir(data_dir) if 'dataset' in d], reverse=True)
     return paths
@@ -36,6 +46,7 @@ def load_datasets(data_path, truncate):
     metadata = load_dataset_metadata(data_path)
 
     if truncate:
+        dlim = int(len(train_x/16))
         train_x = train_x[:64]
         train_y = train_y[:64]
         valid_x = valid_x[:64]
@@ -102,6 +113,7 @@ total_runtime_seconds = total_runtime_hours * 60 * 60
 
 if __name__ == '__main__':
     # this try/except statement will ensure that exceptions are logged when running from the makefile
+    set_seed(0)
     try:
         # print main header
         print("=" * 75)
@@ -113,12 +125,13 @@ if __name__ == '__main__':
 
         # iterate over datasets in the datasets directory
         for dataset in os.listdir("datasets"):
+            torch.cuda.empty_cache()
             # log starting time remaining
             start_remaining_time = runclock.log_remaining_time()
             start_iteration_time = time.time()
 
             # load and display data info
-            (train_x, train_y), (valid_x, valid_y), (test_x), metadata = load_datasets(dataset, truncate=False)
+            (train_x, train_y), (valid_x, valid_y), (test_x), metadata = load_datasets(dataset, truncate=True)
             metadata['time_remaining'] = runclock.check()
             this_dataset_start_time = time.time()
 

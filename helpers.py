@@ -90,7 +90,7 @@ class NetworkMix(nn.Module):
     super(NetworkMix, self).__init__()
     self._layers = layers
     
-    stem_multiplier = 0.25
+    stem_multiplier = 0.50
     C_curr = int(stem_multiplier*C)
     self.stem = nn.Sequential(
       nn.Conv2d(start_layer, C_curr, 3, padding=1, bias=False),
