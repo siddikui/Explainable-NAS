@@ -33,7 +33,7 @@ class NAS:
         You can modify or add anything into the metadata that you wish,
         if you want to pass messages between your classes,
     """
-    def __init__(self, train_loader, valid_loader,  metadata):
+    def __init__(self, train_loader, valid_loader, metadata):
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.metadata = metadata
@@ -45,7 +45,7 @@ class NAS:
         self.epochs = epochs
         self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100)
 
         if torch.cuda.is_available():
             self.model.cuda()
@@ -74,7 +74,7 @@ class NAS:
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
-        logging.info("  Total runtime: {}".format(show_time(time.time() - t_start)))
+        logging.info("Candidate Evaluation Time: {}".format(show_time(time.time() - t_start)))
         return train_acc*100, valid_acc*100
 
 
@@ -96,11 +96,11 @@ class NAS:
 
         target_acc= 100
         min_width= 16
-        max_width= 128
+        max_width= 160
         width_resolution = 8
-        min_depth= 8
-        max_depth= 25
-        max_epochs = 20
+        min_depth= 5
+        max_depth= 40
+        max_epochs = 50
 
         channels = f_channels = 16 
         layers = min_depth
@@ -108,6 +108,8 @@ class NAS:
         add_epochs = 1
         epochs = 1
         f_epochs = 0
+
+        macro_count = 0
 
         # Initialize
         curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
@@ -120,10 +122,8 @@ class NAS:
         logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
 
         logging.info("Model Parameters = %f", general_num_params(model))
-        logging.info('Training Model...')
-        # train model using your Trainer
-        print("\n=== Training ===")
-        print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
+        logging.info('Evaluating Candidate Model...')
+
         curr_arch_train_acc, curr_arch_test_acc  = self.train(epochs, model)
 
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
@@ -152,46 +152,66 @@ class NAS:
                 layers_up = False
                 channels_up = True
                 epochs_up = True
+                macro_count+=1
             
             elif channels_up and channels < max_width:
                 
                 channels += int(width_resolution/2)
                 channels_up = False
-                layers_up = False
                 epochs_up = True 
-            
+                macro_count+=1
+
             elif epochs_up and epochs < max_epochs:
-                
+                                
                 epochs = epochs + add_epochs
                 epochs_up = False
                 layers_up = True
                 channels_up = True
+                #if macro_count%4==0:
+                #    epochs = epochs - add_epochs
+                #    layers += 1
+                #    channels += int(width_resolution/2)
 
 
             next_arch_ops = np.zeros((layers,), dtype=int)
             next_arch_kernel = 3*np.ones((layers,), dtype=int)
-            model = NetworkMix(channels,self.metadata, layers, next_arch_ops,
-                next_arch_kernel)  
+            model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)  
                         
             logging.info('#############################################################################')
             logging.info('Moving to Next Candidate Architecture...')
-
             logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
             logging.info("Model Parameters = %f", general_num_params(model))
 
-            logging.info('Training Model...')
-            # train model using your Trainer
-            print("\n=== Training ===")
-            print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
+            if general_num_params(model) > 5_000_000:
+                logging.info("Model Parameters Exceed Upper Bound")
+                break;
+
+            nas_time_secs = 120
+            if runclock.check() < (24*60*60-nas_time_secs):
+                print("Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
+                logging.info("Time Limit Exceeds Given Deadline")
+                break;
+
+            #logging.info("Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
+            logging.info("Allotted compute time remaining: ~{}".format(runclock.check()))
+
+            logging.info('Evaluating Candidate Model...')
+            
             next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model)
 
             logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
             
             # As long as we get significant improvement by increasing depth.
             
-            if (next_arch_test_acc > curr_arch_test_acc + 1):
+            if (next_arch_test_acc > curr_arch_test_acc + 0.5):
+
+                if layers_up is False:
+                    if channels_up is False:
+                        channels_up = True
+                    else:
+                        layers_up =True    
+
                 # update current architecture.
-                depth_fail_count = 0
                 curr_arch_ops = next_arch_ops
                 curr_arch_kernel = next_arch_kernel
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)

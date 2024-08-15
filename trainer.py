@@ -5,6 +5,7 @@ import torch
 from torch import optim
 import torch.nn as nn
 from helpers import show_time
+import logging
 
 class Trainer:
     """
@@ -30,10 +31,10 @@ class Trainer:
         self.metadata = metadata
 
         # define  training parameters
-        self.epochs = 2
+        self.epochs = 500
         self.optimizer = optim.SGD(model.parameters(), lr=.01, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100)
 
     """
     ====================================================================================================================
@@ -45,6 +46,8 @@ class Trainer:
     See the example submission for how this should look
     """
     def train(self):
+
+        final_train_time_secs = 60
         if torch.cuda.is_available():
             self.model.cuda()
         t_start = time.time()
@@ -67,12 +70,16 @@ class Trainer:
 
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
-            print("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
+            logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
                 epoch + 1, self.epochs,
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
-        print("  Total runtime: {}".format(show_time(time.time() - t_start)))
+
+            if time.time() - t_start > final_train_time_secs:
+                logging.info("Final Training Time Exceeded Given Limit")
+                break;
+        logging.info("  Total final training runtime: {}".format(show_time(time.time() - t_start)))
         return self.model
     # print out the model's accuracy over the valid dataset
     # (this isn't necessary for a submission, but I like it for my training logs)
