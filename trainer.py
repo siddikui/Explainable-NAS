@@ -26,15 +26,23 @@ class Trainer:
     def __init__(self, model, device, train_dataloader, valid_dataloader, metadata):
         self.model = model
         self.device = device
+        self.model = model.to(self.device)
+
         self.train_dataloader = train_dataloader
         self.valid_dataloader = valid_dataloader
         self.metadata = metadata
 
         # define  training parameters
         self.epochs = 500
+        
         self.optimizer = optim.SGD(model.parameters(), lr=.01, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100)
+        checkpoint = torch.load(self.metadata["codename"]+".pth", map_location=self.device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.start_epochs = checkpoint['epoch']
+    
 
     """
     ====================================================================================================================
@@ -48,10 +56,9 @@ class Trainer:
     def train(self):
 
         final_train_time_secs = 60
-        if torch.cuda.is_available():
-            self.model.cuda()
+       
         t_start = time.time()
-        for epoch in range(self.epochs):
+        for epoch in range(self.start_epochs, self.start_epochs + self.epochs ):
             self.model.train()
             labels, predictions = [], []
             for data, target in self.train_dataloader:
@@ -71,7 +78,7 @@ class Trainer:
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
             logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
-                epoch + 1, self.epochs,
+                epoch + 1, self.start_epochs + self.epochs,
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
