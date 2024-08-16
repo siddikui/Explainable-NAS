@@ -2,7 +2,7 @@ import torchvision
 import torch.nn as nn
 import torch
 from torch import optim
-from helpers import NetworkMix , show_time, general_num_params, Clock
+from helpers import NetworkMix , show_time, general_num_params, Clock, set_seed
 import logging, sys, os
 from sklearn.metrics import accuracy_score
 import numpy as np
@@ -15,6 +15,7 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO, format=log_format, da
 fh = logging.FileHandler(os.path.join( 'Searchlog.txt'))
 fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
+
 class NAS:
     """
     ====================================================================================================================
@@ -34,11 +35,49 @@ class NAS:
         if you want to pass messages between your classes,
     """
     def __init__(self, train_loader, valid_loader, metadata):
+
+        total_train_size = len(train_loader.dataset)
+        print(f"Total train size: {total_train_size}")
+
+        # Split the training dataset into two equal subsets
+        train_subset_size = total_train_size // 16
+        train_subset, _ = torch.utils.data.random_split(
+            train_loader.dataset, [train_subset_size, total_train_size - train_subset_size]
+        )
+
+        # DataLoader for subset of the training dataset
+        train_loader = torch.utils.data.DataLoader(
+            train_subset,
+            batch_size=train_loader.batch_size,
+            drop_last=True,
+            shuffle=True
+        )
+
+        total_valid_size = len(valid_loader.dataset)
+        print(f"Total valid size: {total_valid_size}")
+
+        # Split the validation dataset into two equal subsets
+        valid_subset_size = total_valid_size // 16
+        valid_subset, _ = torch.utils.data.random_split(
+            valid_loader.dataset, [valid_subset_size, total_valid_size - valid_subset_size]
+        )
+
+        # DataLoader for subset of the validation dataset
+        valid_loader = torch.utils.data.DataLoader(
+            valid_subset,
+            batch_size=valid_loader.batch_size,
+            drop_last=True,
+            shuffle=True
+        )
+
+        print(f"Train loader size after split: {len(train_loader.dataset)}")
+        print(f"Valid loader size after split: {len(valid_loader.dataset)}") 
+
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.metadata = metadata
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device('cpu')
-        
+        set_seed(1)
 
     def train(self,epochs,model):
         self.model = model
@@ -88,6 +127,13 @@ class NAS:
             predictions += torch.argmax(output, 1).detach().cpu().tolist()
         return accuracy_score(labels, predictions)
 
+    def save_checkpoint(self, model, epoch):
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+        }, self.metadata["codename"]+".pth")
+        print(f"Checkpoint saved to {self.metadata['codename']}.pth")
 
     def search_depth_and_width(self):
         
@@ -219,6 +265,9 @@ class NAS:
                 curr_arch_test_acc = next_arch_test_acc
                 f_channels = channels
                 f_epochs = epochs
+
+                self.save_checkpoint(model, f_epochs)
+
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
             else:
