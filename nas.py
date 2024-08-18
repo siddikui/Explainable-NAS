@@ -7,6 +7,7 @@ import logging, sys, os
 from sklearn.metrics import accuracy_score
 import numpy as np
 import time
+import copy
 
 total_runtime_hours = 24
 total_runtime_seconds = total_runtime_hours * 60 * 60
@@ -79,7 +80,9 @@ class NAS:
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device('cpu')
         set_seed(1)
 
-    def train(self,epochs,model):
+
+    
+    def train(self, epochs, model):
         self.model = model
         self.epochs = epochs
         self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
@@ -88,33 +91,53 @@ class NAS:
 
         if torch.cuda.is_available():
             self.model.cuda()
+
         t_start = time.time()
+        best_valid_acc = 0.0
+        best_train_acc = 0.0
+        best_epoch = 0
+        best_model = None
+
         for epoch in range(epochs):
             self.model.train()
             labels, predictions = [], []
+            
             for data, target in self.train_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model.forward(data)
 
-                # store labels and predictions to compute accuracy
+                # Store labels and predictions to compute accuracy
                 labels += target.cpu().tolist()
                 predictions += torch.argmax(output, 1).detach().cpu().tolist()
 
                 loss = self.criterion(output, target)
                 loss.backward()
                 self.optimizer.step()
+
             self.scheduler.step()
 
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
+            
             logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
                 epoch + 1, self.epochs,
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
+
+            # Check if this is the best model based on validation accuracy
+            if valid_acc > best_valid_acc:
+                best_valid_acc = valid_acc
+                best_train_acc = train_acc
+                self.best_epoch = epoch + 1
+                best_model = copy.deepcopy(self.model)  # Keep a copy of the best model
+
+        self.model = best_model
         logging.info("Candidate Evaluation Time: {}".format(show_time(time.time() - t_start)))
-        return train_acc*100, valid_acc*100
+        
+        # Return best train acc, best valid acc, and the best epoch number
+        return best_train_acc * 100, best_valid_acc * 100
 
 
     def evaluate(self):
@@ -265,8 +288,8 @@ class NAS:
                 curr_arch_test_acc = next_arch_test_acc
                 f_channels = channels
                 f_epochs = epochs
-
-                self.save_checkpoint(model, f_epochs)
+                s_epoch = self.best_epoch
+                self.save_checkpoint(model, self.best_epoch)
 
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
@@ -283,7 +306,7 @@ class NAS:
                 
         logging.info('Discovered Final Depth %s', f_layers)
         logging.info('Discovered Final Width %s', f_channels)
-        logging.info('Discovered Final Epochs %s', f_epochs)
+        logging.info('Discovered Final Epochs %s best saved epoch %s', f_epochs, s_epoch)
         logging.info('#############################################################################')
         logging.info('#############################################################################')
         logging.info('')  
