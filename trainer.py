@@ -6,6 +6,8 @@ from torch import optim
 import torch.nn as nn
 from helpers import show_time
 import logging
+import copy
+
 
 class Trainer:
     """
@@ -42,6 +44,7 @@ class Trainer:
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.start_epochs = checkpoint['epoch']
+        print(self.start_epochs)
     
 
     """
@@ -53,41 +56,64 @@ class Trainer:
     
     See the example submission for how this should look
     """
+
     def train(self):
 
         final_train_time_secs = 60
-       
         t_start = time.time()
-        for epoch in range(self.start_epochs, self.start_epochs + self.epochs ):
+
+        best_model = None
+        best_valid_acc = 0.0
+
+        for epoch in range(self.start_epochs, self.start_epochs + self.epochs):
             self.model.train()
             labels, predictions = [], []
+
             for data, target in self.train_dataloader:
                 data, target = data.to(self.device), target.to(self.device)
                 self.optimizer.zero_grad()
                 output = self.model.forward(data)
 
-                # store labels and predictions to compute accuracy
+                # Store labels and predictions to compute accuracy
                 labels += target.cpu().tolist()
                 predictions += torch.argmax(output, 1).detach().cpu().tolist()
 
                 loss = self.criterion(output, target)
                 loss.backward()
                 self.optimizer.step()
+
             self.scheduler.step()
 
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
+
             logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
                 epoch + 1, self.start_epochs + self.epochs,
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
 
+            # Check if this is the best model based on validation accuracy
+            if valid_acc > best_valid_acc:
+                best_valid_acc = valid_acc
+                best_train_acc = train_acc
+                best_epoch = epoch + 1
+                best_model = copy.deepcopy(self.model)  # Keep a copy of the best model
+
+
             if time.time() - t_start > final_train_time_secs:
                 logging.info("Final Training Time Exceeded Given Limit")
-                break;
-        logging.info("  Total final training runtime: {}".format(show_time(time.time() - t_start)))
-        return self.model
+                break
+
+        logging.info("Total final training runtime: {}".format(show_time(time.time() - t_start)))
+        self.model = best_model
+         # Log the best model stats after training ends
+        logging.info("Best Model Stats: Epoch {:>3}, Train Acc: {:>6.2f}%, Valid Acc: {:>6.2f}%".format(
+        best_epoch, best_train_acc * 100, best_valid_acc * 100
+        ))
+
+        return self.model  # Return the model with the best validation accuracy
+
     # print out the model's accuracy over the valid dataset
     # (this isn't necessary for a submission, but I like it for my training logs)
     def evaluate(self):
