@@ -37,9 +37,9 @@ class Trainer:
         # define  training parameters
         self.epochs = 500
         
-        self.optimizer = optim.SGD(model.parameters(), lr=.01, momentum=.9, weight_decay=3e-4)
+        self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=500)
         checkpoint = torch.load(self.metadata["codename"]+".pth", map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -59,7 +59,7 @@ class Trainer:
 
     def train(self):
 
-        final_train_time_secs = 60
+        final_train_time_secs = 180
         t_start = time.time()
 
         best_model = None

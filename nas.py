@@ -58,7 +58,7 @@ class NAS:
         print(f"Total valid size: {total_valid_size}")
 
         # Split the validation dataset into two equal subsets
-        valid_subset_size = total_valid_size // 16
+        valid_subset_size = total_valid_size // 1
         valid_subset, _ = torch.utils.data.random_split(
             valid_loader.dataset, [valid_subset_size, total_valid_size - valid_subset_size]
         )
@@ -87,7 +87,7 @@ class NAS:
         self.epochs = epochs
         self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=500)
 
         if torch.cuda.is_available():
             self.model.cuda()
@@ -163,6 +163,9 @@ class NAS:
 
         runclock = Clock(total_runtime_seconds)
 
+        nas_time_secs = 180
+        max_params = 5_000_000
+
         target_acc= 100
         min_width= 16
         max_width= 160
@@ -194,6 +197,8 @@ class NAS:
         logging.info('Evaluating Candidate Model...')
 
         curr_arch_train_acc, curr_arch_test_acc  = self.train(epochs, model)
+        
+        self.save_checkpoint(model, epochs)
 
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
@@ -251,11 +256,11 @@ class NAS:
             logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
             logging.info("Model Parameters = %f", general_num_params(model))
 
-            if general_num_params(model) > 5_000_000:
+            if general_num_params(model) > max_params:
                 logging.info("Model Parameters Exceed Upper Bound")
                 break;
 
-            nas_time_secs = 120
+            
             if runclock.check() < (24*60*60-nas_time_secs):
                 print("Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
                 logging.info("Time Limit Exceeds Given Deadline")
