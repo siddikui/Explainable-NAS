@@ -59,7 +59,7 @@ class Trainer:
 
     def train(self):
 
-        final_train_time_secs = 180
+        final_train_time_secs = 12600
         t_start = time.time()
 
         best_model = None

@@ -41,7 +41,7 @@ class NAS:
         print(f"Total train size: {total_train_size}")
 
         # Split the training dataset into two equal subsets
-        train_subset_size = total_train_size // 16
+        train_subset_size = total_train_size // 1
         train_subset, _ = torch.utils.data.random_split(
             train_loader.dataset, [train_subset_size, total_train_size - train_subset_size]
         )
@@ -163,16 +163,16 @@ class NAS:
 
         runclock = Clock(total_runtime_seconds)
 
-        nas_time_secs = 180
-        max_params = 5_000_000
+        nas_time_secs = 14400
+        max_params = 6_000_000
 
         target_acc= 100
         min_width= 16
-        max_width= 160
+        max_width= 256
         width_resolution = 8
         min_depth= 5
-        max_depth= 40
-        max_epochs = 50
+        max_depth= 100
+        max_epochs = 100
 
         channels = f_channels = 16 
         layers = min_depth
@@ -277,7 +277,7 @@ class NAS:
             
             # As long as we get significant improvement by increasing depth.
             
-            if (next_arch_test_acc > curr_arch_test_acc + 0.5):
+            if (next_arch_test_acc > curr_arch_test_acc + 0.10):
 
                 if layers_up is False:
                     if channels_up is False:
