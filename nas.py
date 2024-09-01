@@ -37,6 +37,8 @@ class NAS:
     """
     def __init__(self, train_loader, valid_loader, metadata):
 
+        set_seed(1)
+
         total_train_size = len(train_loader.dataset)
         print(f"Total train size: {total_train_size}")
 
@@ -78,7 +80,6 @@ class NAS:
         self.valid_loader = valid_loader
         self.metadata = metadata
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device('cpu')
-        set_seed(1)
 
 
     
@@ -87,7 +88,7 @@ class NAS:
         self.epochs = epochs
         self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=500)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=300)
 
         if torch.cuda.is_available():
             self.model.cuda()
@@ -163,8 +164,8 @@ class NAS:
 
         runclock = Clock(total_runtime_seconds)
 
-        nas_time_secs = 14400
-        max_params = 6_000_000
+        nas_time_secs = 144000
+        max_params = 4_000_000
 
         target_acc= 100
         min_width= 16
@@ -178,7 +179,7 @@ class NAS:
         layers = min_depth
         
         add_epochs = 1
-        epochs = 1
+        s_epoch = epochs = 1
         f_epochs = 0
 
         macro_count = 0

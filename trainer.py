@@ -35,11 +35,12 @@ class Trainer:
         self.metadata = metadata
 
         # define  training parameters
-        self.epochs = 500
+        self.epochs = 300
         
         self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=500)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=300)
+
         checkpoint = torch.load(self.metadata["codename"]+".pth", map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -59,13 +60,14 @@ class Trainer:
 
     def train(self):
 
-        final_train_time_secs = 12600
+        final_train_time_secs = 126000
         t_start = time.time()
 
         best_model = None
         best_valid_acc = 0.0
 
-        for epoch in range(self.start_epochs, self.start_epochs + self.epochs):
+        for epoch in range(self.start_epochs, self.epochs):
+        #for epoch in range(0, self.epochs):
             self.model.train()
             labels, predictions = [], []
 
@@ -86,13 +88,19 @@ class Trainer:
 
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
-
+            
             logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
                 epoch + 1, self.start_epochs + self.epochs,
                 train_acc * 100, valid_acc * 100,
                 show_time((time.time() - t_start) / (epoch + 1))
             ))
-
+            '''
+            logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
+                epoch + 1, self.epochs,
+                train_acc * 100, valid_acc * 100,
+                show_time((time.time() - t_start) / (epoch + 1))
+                ))
+            '''
             # Check if this is the best model based on validation accuracy
             if valid_acc > best_valid_acc:
                 best_valid_acc = valid_acc
