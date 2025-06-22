@@ -16,11 +16,11 @@ if __name__ == '__main__':
         # iterate through datasets
         total_score = 0
         overall_stats = {}
-        for dataset in os.listdir("/home/sdki/Downloads/CVPR-data"):
+        for dataset in os.listdir("datasets"):
             print("== Scoring {} ==".format(dataset))
 
             # load user predictions from file
-            data_path = '/home/sdki/Downloads/CVPR-data/'+dataset
+            data_path = 'datasets/'+dataset
             labels = np.load(os.path.join(data_path, 'test_y.npy'))
             with open(os.path.join(data_path, 'metadata'), "r") as f:
                 metadata = json.load(f)

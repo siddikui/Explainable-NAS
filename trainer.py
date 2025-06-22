@@ -25,29 +25,31 @@ class Trainer:
             'time_remaining': The amount of compute time left for your submission
             plus anything else you added in the DataProcessor or NAS classes
     """
-    def __init__(self, model, device, train_dataloader, valid_dataloader, metadata):
+    def __init__(self, model, device, train_dataloader, valid_dataloader, lr, epochs, metadata):
         self.model = model
         self.device = device
-        self.model = model.to(self.device)
+        #self.model = model.to(self.device)
+        self.model = model.cuda()
 
         self.train_dataloader = train_dataloader
         self.valid_dataloader = valid_dataloader
         self.metadata = metadata
 
         # define  training parameters
-        self.epochs = 300
-        
-        self.optimizer = optim.SGD(model.parameters(), lr=.025, momentum=.9, weight_decay=3e-4)
+        self.lr = lr
+        self.epochs = epochs
+        self.epc_mult = 50        
+        self.optimizer = optim.SGD(model.parameters(), lr=self.lr, momentum=.9, weight_decay=3e-4)
         self.criterion = nn.CrossEntropyLoss()
-        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=300)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs)
 
-        checkpoint = torch.load(self.metadata["codename"]+".pth", map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.start_epochs = checkpoint['epoch']
-        print(self.start_epochs)
-    
-
+        #checkpoint = torch.load(self.metadata["codename"]+".pth", map_location=self.device)
+        #self.model.load_state_dict(checkpoint['model_state_dict'])
+        #self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        #self.start_epochs = checkpoint['epoch']
+        #print(self.start_epochs)
+        #self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.start_epochs*self.epc_mult)
+        #self.epochs = self.start_epochs*self.epc_mult
     """
     ====================================================================================================================
     TRAIN ==============================================================================================================
@@ -60,19 +62,21 @@ class Trainer:
 
     def train(self):
 
-        final_train_time_secs = 126000
+        final_train_time_secs = 3600*4
         t_start = time.time()
 
         best_model = None
         best_valid_acc = 0.0
 
-        for epoch in range(self.start_epochs, self.epochs):
-        #for epoch in range(0, self.epochs):
+        #for epoch in range(self.start_epochs, self.epochs):
+        for epoch in range(0, self.epochs):
             self.model.train()
             labels, predictions = [], []
 
             for data, target in self.train_dataloader:
-                data, target = data.to(self.device), target.to(self.device)
+                #data, target = data.to(self.device), target.to(self.device)
+                data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
+                target=target.to(torch.int64)
                 self.optimizer.zero_grad()
                 output = self.model.forward(data)
 
@@ -82,25 +86,23 @@ class Trainer:
 
                 loss = self.criterion(output, target)
                 loss.backward()
+                nn.utils.clip_grad_norm_(self.model.parameters(), 5)
                 self.optimizer.step()
 
-            self.scheduler.step()
 
             train_acc = accuracy_score(labels, predictions)
             valid_acc = self.evaluate()
-            
-            logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
-                epoch + 1, self.start_epochs + self.epochs,
-                train_acc * 100, valid_acc * 100,
-                show_time((time.time() - t_start) / (epoch + 1))
-            ))
-            '''
-            logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} |".format(
+
+            logging.info("\tEpoch {:>3}/{:<3} | Train Acc: {:>6.2f}% | Valid Acc: {:>6.2f}% | T/Epoch: {:<7} | LR: {:>2.6f} |".format(
                 epoch + 1, self.epochs,
                 train_acc * 100, valid_acc * 100,
-                show_time((time.time() - t_start) / (epoch + 1))
-                ))
-            '''
+                show_time((time.time() - t_start) / (epoch + 1)),
+                self.scheduler.get_last_lr()[0]
+            ))
+
+            self.scheduler.step()
+
+
             # Check if this is the best model based on validation accuracy
             if valid_acc > best_valid_acc:
                 best_valid_acc = valid_acc
@@ -128,7 +130,9 @@ class Trainer:
         self.model.eval()
         labels, predictions = [], []
         for data, target in self.valid_dataloader:
-            data = data.to(self.device)
+            #data = data.to(self.device)
+            data = data.cuda(non_blocking=True)
+
             output = self.model.forward(data)
             labels += target.cpu().tolist()
             predictions += torch.argmax(output, 1).detach().cpu().tolist()
@@ -152,7 +156,9 @@ class Trainer:
         self.model.eval()
         predictions = []
         for data in test_loader:
-            data = data.to(self.device)
+            #data = data.to(self.device)
+            data = data.cuda(non_blocking=True)
+
             output = self.model.forward(data)
             predictions += torch.argmax(output, 1).detach().cpu().tolist()
         return predictions

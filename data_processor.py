@@ -2,9 +2,36 @@ import torch
 import torchvision.transforms as transforms
 import numpy as np
 
+class Cutout(object):
+    def __init__(self, length):
+        self.length = length
+
+    def __call__(self, img):
+        h, w = img.size(1), img.size(2)
+        mask = np.ones((h, w), np.float32)
+        y = np.random.randint(h)
+        x = np.random.randint(w)
+
+        y1 = np.clip(y - self.length // 2, 0, h)
+        y2 = np.clip(y + self.length // 2, 0, h)
+        x1 = np.clip(x - self.length // 2, 0, w)
+        x2 = np.clip(x + self.length // 2, 0, w)
+
+        mask[y1: y2, x1: x2] = 0.
+        mask = torch.from_numpy(mask)
+        mask = mask.expand_as(img)
+        img *= mask
+        return img
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, x, y, train=False, transform=None):
+
+        
+        min_len = min(x.shape[2],x.shape[3])
+        max_len = max(x.shape[2],x.shape[3])
+        cutout_len = int(min_len/4)
+        print(x.shape, min_len, cutout_len)
+
         self.x = torch.tensor(x)
         # the test dataset has no labels, so we don't need to care about self.y
         if y is None:
@@ -17,11 +44,17 @@ class Dataset(torch.utils.data.Dataset):
             self.mean = torch.mean(self.x, [0, 2, 3])
             self.std = torch.std(self.x, [0, 2, 3])
             self.transform = transforms.Compose([
-                # transforms.RandomAffine(degrees=0, translate=(0.2, 0.3)),  # Random translation within 20% of the image size
-                # transforms.RandomRotation(degrees=30),  # Random rotation within +/- 30 degrees
-                # transforms.RandomResizedCrop(size=(x.shape[2], x.shape[3]), scale=(0.8, 1.2)),  # Random scaling within 80%-120% of the original size
+                #transforms.RandomCrop((x.shape[2],x.shape[3]), padding=4),
+                #transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  
+                #transforms.RandomRotation(degrees=10),  
+                #transforms.RandomHorizontalFlip(),
+                #transforms.RandomResizedCrop(size=(x.shape[2], x.shape[3]), scale=(0.8, 1.2),antialias=True),
+                #transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
                 transforms.Normalize(self.mean, self.std)
+                
             ])
+
+            self.transform.transforms.append(Cutout(cutout_len))
         else:
             self.transform = transform
 
@@ -60,13 +93,14 @@ class DataProcessor:
     You can modify or add anything into the metadata that you wish, if you want to pass messages between your classes
 
     """
-    def __init__(self, train_x, train_y, valid_x, valid_y, test_x, metadata):
+    def __init__(self, train_x, train_y, valid_x, valid_y, test_x, metadata, batch_size):
         self.train_x = train_x
         self.train_y = train_y
         self.valid_x = valid_x
         self.valid_y = valid_y
         self.test_x = test_x
         self.metadata = metadata
+        self.batch_size = batch_size
 
     """
     ====================================================================================================================
@@ -87,18 +121,18 @@ class DataProcessor:
         valid_ds = Dataset(self.valid_x, self.valid_y, transform=train_ds.transform)
         test_ds = Dataset(self.test_x, None, transform=train_ds.transform)
 
-        batch_size = 64
+        #batch_size = 64
 
         # build data loaders
         train_loader = torch.utils.data.DataLoader(train_ds,
-                                                   batch_size=batch_size,
+                                                   batch_size=self.batch_size,
                                                    drop_last=True,
                                                    shuffle=True)
         valid_loader = torch.utils.data.DataLoader(valid_ds,
-                                                   batch_size=batch_size,
+                                                   batch_size=self.batch_size,
                                                    shuffle=False)
         test_loader = torch.utils.data.DataLoader(test_ds,
-                                                  batch_size=batch_size,
+                                                  batch_size=self.batch_size,
                                                   shuffle=False,
                                                   drop_last=False)
         return train_loader, valid_loader, test_loader

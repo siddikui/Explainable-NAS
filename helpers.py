@@ -4,7 +4,7 @@ import torch.nn as nn
 import time
 import numpy as np
 import random
-
+import logging, sys, os
 # === MODEL ANALYSIS ===================================================================================================
 def general_num_params(model):
     # return number of differential parameters of input model
@@ -47,6 +47,7 @@ def red_blcks(input_shape):
     count = 0
     lesser = min(input_shape[2], input_shape[3])
     while(lesser > 4):
+    #while(lesser > 2):  
         lesser /= 2
         # print(lesser)
         count+=1
@@ -92,8 +93,9 @@ class NetworkMix(nn.Module):
     super(NetworkMix, self).__init__()
     self._layers = layers
     
-    stem_multiplier = 0.50
-    C_curr = int(stem_multiplier*C)
+    stem_multiplier = 1#0.50
+    #C_curr = int(stem_multiplier*C)
+    C_curr = int(stem_multiplier*start_layer)
     self.stem = nn.Sequential(
       nn.Conv2d(start_layer, C_curr, 3, padding=1, bias=False),
       nn.BatchNorm2d(C_curr)
@@ -157,8 +159,14 @@ class NetworkMix(nn.Module):
 
 def set_seed(seed):
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+def log_lines(n):
+    for i in range(n):
+        logging.info('#############################################################################')
+  
