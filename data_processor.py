@@ -1,6 +1,7 @@
 import torch
 import torchvision.transforms as transforms
 import numpy as np
+import torch.nn.functional as F
 
 class Cutout(object):
     def __init__(self, length):
@@ -26,52 +27,64 @@ class Cutout(object):
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, x, y, train=False, transform=None):
 
+        x = np.array(x)
+
+        min_dim = min(x.shape[-2:])
+
+        if min_dim >= 16:
+            cutout_length = min(x.shape[-2:]) // 8
+        else:
+            cutout_length = 1
+
+        # If input is (h, w), add channel and batch dimensions -> (1, 1, h, w)
+        if x.ndim == 2:  # (h, w)
+            x = x[None, ...]  # (1, h, w)
+        # If input is (c, h, w), add batch dimension -> (1, c, h, w)
+        if x.ndim == 3:
+            if x.shape[0] <= 4:  # likely (c, h, w)
+                x = x[None, ...]  # (1, c, h, w)
+            else:  # likely (n, h, w)
+                x = x[:, None, ...]  # (n, 1, h, w)
+        # If input is (n, h, w, c), move channels to second dim -> (n, c, h, w)
+        if x.ndim == 4 and x.shape[1] not in [1, 3]:
+            if x.shape[-1] in [1, 3]:
+                x = np.moveaxis(x, -1, 1)
+
+        self.x = x
+        self.y = y
+
         
-        min_len = min(x.shape[2],x.shape[3])
-        max_len = max(x.shape[2],x.shape[3])
-        cutout_len = int(min_len/4)
-        print(x.shape, min_len, cutout_len)
 
-        self.x = torch.tensor(x)
-        # the test dataset has no labels, so we don't need to care about self.y
-        if y is None:
-            self.y = None
-        else:
-            self.y = torch.tensor(y)
-
-        # example transform
+        self.mean = torch.mean(torch.tensor(x), [0, 2, 3])  # Compute mean
+        self.std = torch.std(torch.tensor(x), [0, 2, 3])    # Compute std
+            
         if train:
-            self.mean = torch.mean(self.x, [0, 2, 3])
-            self.std = torch.std(self.x, [0, 2, 3])
             self.transform = transforms.Compose([
-                #transforms.RandomCrop((x.shape[2],x.shape[3]), padding=4),
-                #transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  
-                #transforms.RandomRotation(degrees=10),  
-                #transforms.RandomHorizontalFlip(),
-                #transforms.RandomResizedCrop(size=(x.shape[2], x.shape[3]), scale=(0.8, 1.2),antialias=True),
-                #transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-                transforms.Normalize(self.mean, self.std)
+                transforms.Normalize(self.mean, self.std)#,
+                #Cutout(cutout_length)  
+            ])  
                 
-            ])
-
-            self.transform.transforms.append(Cutout(cutout_len))
-        else:
-            self.transform = transform
-
+                
+        else:            
+            
+            self.transform = transforms.Compose([
+                transforms.Normalize(self.mean, self.std)  
+            ])      
+            
+    
     def __len__(self):
         return len(self.x)
-
+    
     def __getitem__(self, idx):
-        im = self.x[idx]
+        im = torch.tensor(self.x[idx], dtype=torch.float32)
 
         if self.transform is not None:
             im = self.transform(im)
 
-        # only return image in the case of the test dataloader
         if self.y is None:
             return im
         else:
-            return im, self.y[idx]
+            return im, torch.tensor(self.y[idx], dtype=torch.long)
 
 class DataProcessor:
     """
@@ -93,14 +106,56 @@ class DataProcessor:
     You can modify or add anything into the metadata that you wish, if you want to pass messages between your classes
 
     """
-    def __init__(self, train_x, train_y, valid_x, valid_y, test_x, metadata, batch_size):
-        self.train_x = train_x
+    def __init__(self, train_x, train_y, valid_x, valid_y, test_x, metadata, clock):
+
+        def resize_if_needed(arr, name):
+        
+            max_dim = 128 
+            min_dim = 8
+            arr = np.array(arr)
+            # Only add channel dimension if missing
+            if len(arr.shape) == 3:
+                arr = arr[:, None, :, :]
+            # Now safe to check spatial dims
+            C = arr.shape[1]
+            H = arr.shape[2]
+            W = arr.shape[3]
+            
+            print('Input Dims: ',C ,' x ', H, ' x ', W)            
+            
+            if max(H,W) > max_dim:
+                if (H > W):
+                    H = max_dim
+                elif (W > H):
+                    W = max_dim
+                else:
+                    H = max_dim
+                    W = max_dim  
+  
+      
+            if min(H,W) < min_dim:
+                if (H < W):
+                    H = min_dim
+                elif (W < H):
+                    W = min_dim
+                else:
+                    H = min_dim
+                    W = min_dim  
+            
+            print('Output Dims: ', C ,' x ', H, ' x ', W)                  
+
+            arr = torch.tensor(arr)
+            arr = F.interpolate(arr, size=(H, W), mode='bilinear', align_corners=False).numpy()
+                         
+            return arr
+
+        self.train_x = resize_if_needed(train_x, 'train_x')
         self.train_y = train_y
-        self.valid_x = valid_x
+        self.valid_x = resize_if_needed(valid_x, 'valid_x')
         self.valid_y = valid_y
-        self.test_x = test_x
+        self.test_x = resize_if_needed(test_x, 'test_x')
         self.metadata = metadata
-        self.batch_size = batch_size
+        self.metadata["input_shape"] = list(self.train_x.shape)
 
     """
     ====================================================================================================================
@@ -118,21 +173,21 @@ class DataProcessor:
     def process(self):
         # create train, valid, and test datasets
         train_ds = Dataset(self.train_x, self.train_y, train=True)
-        valid_ds = Dataset(self.valid_x, self.valid_y, transform=train_ds.transform)
-        test_ds = Dataset(self.test_x, None, transform=train_ds.transform)
+        valid_ds = Dataset(self.valid_x, self.valid_y, train=False)
+        test_ds = Dataset(self.test_x, None, train=False)
 
-        #batch_size = 64
+        batch_size = 64
 
         # build data loaders
         train_loader = torch.utils.data.DataLoader(train_ds,
-                                                   batch_size=self.batch_size,
+                                                   batch_size=batch_size,
                                                    drop_last=True,
                                                    shuffle=True)
         valid_loader = torch.utils.data.DataLoader(valid_ds,
-                                                   batch_size=self.batch_size,
+                                                   batch_size=batch_size,
                                                    shuffle=False)
         test_loader = torch.utils.data.DataLoader(test_ds,
-                                                  batch_size=self.batch_size,
+                                                  batch_size=batch_size,
                                                   shuffle=False,
                                                   drop_last=False)
         return train_loader, valid_loader, test_loader

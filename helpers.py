@@ -45,13 +45,20 @@ def show_time(seconds):
 
 def red_blcks(input_shape):
     count = 0
+    
     lesser = min(input_shape[2], input_shape[3])
-    while(lesser > 4):
-    #while(lesser > 2):  
+    
+    if input_shape[2] > 56 or input_shape[3] > 56:
+        min_dim_red = 16
+    else:
+        min_dim_red = 11
+    
+    while(lesser > 11):
+        
         lesser /= 2
         # print(lesser)
         count+=1
-    print('Reduction Blocks: ', count) 
+    #print('Reduction Blocks: ', count) 
     return count
 
 class Conv(nn.Module):
@@ -92,32 +99,51 @@ class NetworkMix(nn.Module):
     num_classes = metadata['num_classes']
     super(NetworkMix, self).__init__()
     self._layers = layers
-    
-    stem_multiplier = 1#0.50
-    #C_curr = int(stem_multiplier*C)
-    C_curr = int(stem_multiplier*start_layer)
+    # input shape if min 48 then stem_multiplier is  0.25
+    # take min out of 3 and 4
+    #if metadata['input_shape'][2] > 64 or metadata['input_shape'][3] > 64:
+    #  stem_multiplier = 0.0625
+    if metadata['input_shape'][2] > 16 or metadata['input_shape'][3] > 16:
+      stem_multiplier = 0.25
+    else:
+      stem_multiplier = 0.50
+
+    C_curr = int(stem_multiplier*C)
+    #C_curr = int(stem_multiplier*start_layer)
     self.stem = nn.Sequential(
       nn.Conv2d(start_layer, C_curr, 3, padding=1, bias=False),
       nn.BatchNorm2d(C_curr)
     )
     
-    C_prev, C_curr = C_curr, C
+
+    C_prev, C_curr = C_curr, C_curr
     
     self.mixlayers = nn.ModuleList()
-    reduction_prev = False
+    # reduction_prev = False
     '''Number of reduction blocks return from the block calculation function
     Genrate the list of of the reduction layers by using the totall nmber of layer
     '''
     num_reduction_blocks = red_blcks(metadata['input_shape'])
     reduction_list = [i * layers // (num_reduction_blocks+1) for i in range(1, num_reduction_blocks+1)]
-    
+    # Channel doubling logic: at each reduction block, channels double (C, 2C, 4C, ...)
+    channel_multiplier = 1
     for i in range(layers):
       if i in reduction_list:
-        C_curr = C * (reduction_list.index(i)+2)
+      
+        
+        if i != reduction_list[0]:
+          channel_multiplier *= 2  # Double channels at each reduction block
+        else:
+          channel_multiplier = 1
+        '''  
+        
+        channel_multiplier *= 2
+        '''
+        C_curr = C * channel_multiplier
+        
         reduction = True
       else:
         reduction = False
-        
       stride = 2 if reduction else 1
       if k_size[i]==3:
         pad=1
@@ -125,15 +151,10 @@ class NetworkMix(nn.Module):
         pad=2
       else:
         pad=3
-
-      
       if mixnet_code[i] == 0:
         mixlayer = SepConv(C_prev, C_curr, kernel_size=k_size[i], stride=stride, padding=pad, affine=True)
       else:
         mixlayer = Conv(C_prev, C_curr, kernel_size=k_size[i], stride=stride, padding=pad, affine=True)
-
-      reduction_prev = reduction
-        
       self.mixlayers += [mixlayer]
       C_prev = C_curr
 
@@ -169,4 +190,24 @@ def set_seed(seed):
 def log_lines(n):
     for i in range(n):
         logging.info('#############################################################################')
-  
+
+def get_per_dataset_time_limits(total_time, dataset_idx, n_datasets, search_ratio=0.6, train_ratio=0.4, extra_ratio=0.0125):
+    """
+    Given total_time (seconds), dataset index (0-based), and number of datasets,
+    reserves extra_ratio (default 3%) for extras, and divides the rest equally among datasets.
+    Returns (search_time, train_time, extra_time) for the current dataset.
+    """
+    if n_datasets < 1:
+        raise ValueError("n_datasets must be >= 1")
+    if total_time < 5400:
+        extra_time = 45#total_time * extra_ratio * 2
+    else:
+        extra_time = 900#total_time * extra_ratio
+    usable_time = total_time - extra_time
+    per_dataset_time = usable_time / n_datasets
+    search_time = per_dataset_time * search_ratio
+    train_time = per_dataset_time * train_ratio
+    per_data_extra = extra_time / n_datasets
+    
+    return search_time, train_time, per_data_extra
+

@@ -4,34 +4,24 @@ import numpy as np
 import pickle as pkl
 import os
 import time
-import logging, sys, os
-from helpers import log_lines, set_seed
+import sys
+import traceback
+
+from time import sleep
+from threading import Thread, Event
+
 import torch
 from torch.utils.data import RandomSampler
 
 from nas import NAS
 from data_processor import DataProcessor
 from trainer import Trainer
-import argparse
+
+#Time limit in hours
+TIME_LIMIT = 32
 
 # === DATA LOADING HELPERS =============================================================================================
 # find the dataset filepaths
-
-
-parser = argparse.ArgumentParser("cifar")
-
-parser.add_argument('--batch_size', type=int, default=64, help='batch size')
-parser.add_argument('--learning_rate', type=float, default=0.05, help='init learning rate')
-parser.add_argument('--epochs', type=int, default=600, help='num of training epochs')
-parser.add_argument('--gpu', type=int, default=3, help='gpu device id')
-parser.add_argument('--seed', type=int, default=3, help='random seed')
-parser.add_argument('--save', type=str, default='Unseen', help='experiment name')
-
-args = parser.parse_args()
-logging.info("Arguments = %s", args)
-
-
-
 def get_dataset_paths(data_dir):
     paths = sorted([os.path.join(data_dir, d) for d in os.listdir(data_dir) if 'dataset' in d], reverse=True)
     return paths
@@ -87,12 +77,24 @@ def show_time(seconds):
 
 # keep a counter of available time
 class Clock:
-    def __init__(self, time_available):
-        self.start_time =  time.time()
-        self.total_time = time_available
+    def __init__(self, time_limit_in_hours):
+        self.start_time =  time.perf_counter()
+        self.time_limit = self.start_time + (time_limit_in_hours * 60 * 60)
 
     def check(self):
-        return self.total_time + self.start_time - time.time()
+        return (self.time_limit - time.perf_counter())
+
+
+def countdown(e:Event, time_limit:int):
+    counter = 0
+    while time.perf_counter() < time_limit:
+        counter += 1
+        if counter == 10:
+            print(f'Time Remaining: {show_time(time_limit - time.perf_counter())}')
+            counter = 0
+        sleep(1)
+    print("Submission exceeded time_limit")
+    e.set()
 
 
 # === MODEL ANALYSIS ===================================================================================================
@@ -104,86 +106,88 @@ def general_num_params(model):
 # === MAIN =============================================================================================================
 # the available runtime will change at various stages of the competition, but feel free to change for local tests
 # note, this is approximate, your runtime will be controlled externally by our server
-total_runtime_hours = 2
-total_runtime_seconds = total_runtime_hours * 60 * 60
+def main():
+    # print main header
+    print("=" * 78)
+    print("="*13 + "    Your NAS Unseen-Data 2025 Submission is running     " + "="*13)
+    print("="*78)
 
+    # start tracking submission runtime
+    runclock = Clock(TIME_LIMIT)
 
-set_seed(args.seed)
+    e = Event()
 
+    t1 = Thread(target=run_wrapper, args=[e, runclock])
+    t2 = Thread(target=countdown, args=[e, runclock.time_limit])
 
-if __name__ == '__main__':
-    # this try/except statement will ensure that exceptions are logged when running from the makefile
+    t1.daemon = True
+    t2.daemon = True
 
-    if not torch.cuda.is_available():
-        logging.info('GPU not available.')
-        sys.exit(1)
+    t1.start()
+    t2.start()
 
-    torch.cuda.set_device(args.gpu)
+    e.wait()
+    return
+
+def run_wrapper(e:Event, runclock:Clock):
     try:
-        # print main header
-        print("=" * 75)
-        print("="*13 + "    Your Unseen Data 2024 Submission is running     " + "="*13)
-        print("="*75)
+        run_submission(runclock)
+    except Exception as e:
+        print(e)
+        print(traceback.format_exc())
+    e.set()
 
-        # start tracking submission runtime
-        runclock = Clock(total_runtime_seconds)
 
+def run_submission(runclock:Clock):
         # iterate over datasets in the datasets directory
         for dataset in os.listdir("datasets"):
             # load and display data info
             (train_x, train_y), (valid_x, valid_y), (test_x), metadata = load_datasets(dataset, truncate=False)
             metadata['time_remaining'] = runclock.check()
-            this_dataset_start_time = time.time()
+            this_dataset_start_time = time.perf_counter()
 
             print("="*10 + " Dataset {:^10} ".format(metadata['codename']) + "="*45)
             print("  Metadata:")
             [print("   - {:<20}: {}".format(k, v)) for k,v in metadata.items()]
 
-
-
             # perform data processing/augmentation/etc using your DataProcessor
             print("\n=== Processing Data ===")
             print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
-            data_processor = DataProcessor(train_x, train_y, valid_x, valid_y, test_x, metadata, args.batch_size)
+            data_processor = DataProcessor(train_x, train_y, valid_x, valid_y, test_x, metadata, runclock)
             train_loader, valid_loader, test_loader = data_processor.process()
             metadata['time_remaining'] = runclock.check()
-
-
 
             # check that the test_loader is configured correctly
             assert_string = "Test Dataloader is {}, this will break evaluation. Please fix this in your DataProcessor init."
             assert not isinstance(test_loader.sampler, RandomSampler), assert_string.format("shuffling")
             assert not test_loader.drop_last, assert_string.format("dropping last batch")
-
-
-
+            
             # search for best model using your NAS algorithm
             print("\n=== Performing NAS ===")
             print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
-            model = NAS(train_loader, valid_loader, metadata).search()
+            model = NAS(train_loader, valid_loader, metadata, runclock).search()
             model_params = int(general_num_params(model))
             metadata['time_remaining'] = runclock.check()
-            
             
             # train model using your Trainer
             print("\n=== Training ===")
             print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device('cpu')
-            trainer = Trainer(model, device, train_loader, valid_loader, args.learning_rate, args.epochs, metadata)
+            trainer = Trainer(model, device, train_loader, valid_loader, metadata, runclock)
             trained_model = trainer.train()
-
 
             # submit predictions to file
             print("\n=== Predicting ===")
             print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
             predictions = trainer.predict(test_loader)
-            run_data = {'Runtime': float(np.round(time.time()-this_dataset_start_time, 2)), 'Params': model_params}
+            run_data = {'Runtime': float(np.round(time.perf_counter()-this_dataset_start_time, 2)), 'Params': model_params}
             with open("predictions/{}_stats.pkl".format(metadata['codename']), "wb") as f:
                 pkl.dump(run_data, f)
             np.save('predictions/{}.npy'.format(metadata['codename']), predictions)
-            print()
             '''
             '''
-            log_lines(8)
-    except Exception as e:
-        print(e)
+            
+            print("Model Training and Prediction Complete")
+
+if __name__ == '__main__':
+    main()
