@@ -222,7 +222,7 @@ class Trainer:
                 self.scheduler.get_last_lr()[0]
             ))
 
-            #self.scheduler.step()
+            self.scheduler.step()
 
 
             # Check if this is the best model based on validation accuracy

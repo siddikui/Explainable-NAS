@@ -61,6 +61,9 @@ class NAS:
     #search_time_limit = 5 * 60  # Hardcoded: 4 hours in seconds for NAS search (change as needed)
     
     def __init__(self, train_loader, valid_loader, metadata, clock):
+
+        log_lines(2)
+
     
         search_size = 0.99
         
@@ -256,12 +259,26 @@ class NAS:
         return best_train_acc * 100, best_valid_acc * 100  # Return best accuracies as percentages
 
 
+    def get_candidate_model(self, layers, channels):
+
+
+        # Returns a model Baseline Model 
+        curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
+        #curr_arch_ops = next_arch_ops = np.ones((layers,), dtype=int)
+
+        curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
+
+
+        model = NetworkMix(channels,self.metadata, layers, curr_arch_ops, curr_arch_kernel)          
+        logging.info("Model Parameters = %f", general_num_params(model))
+
+        return model
+
     def search_depth_and_width(self):
         self.search_start = time.time()  # Track search start time for time limit enforcement
         
         logging.info('RUNNING SEARCH on %s', self.metadata['codename'])
 
-        #max_params = 2_000_000
         
         min_dim = min(self.metadata['input_shape'][2],self.metadata['input_shape'][3])
         max_dim = max(self.metadata['input_shape'][2],self.metadata['input_shape'][3])
@@ -270,31 +287,26 @@ class NAS:
         total_input_pts = self.metadata['input_shape'][1]*self.metadata['input_shape'][2]*self.metadata['input_shape'][3]
 
         if min_dim >= 96: #if input > 3x64x64
-            max_params = 3_000_000
+            max_params = 3_500_000
         elif min_dim >= 48:
-            max_params = 2_000_000
+            max_params = 3_000_000
         elif min_dim >=  24:
-            max_params = 1_000_000    
-        elif min_dim >=  24:
-            max_params = 500_000    
-
+            max_params = 2_500_000
+        elif min_dim >= 12:
+            max_params = 1_500_000    
         else:
-            max_params = 100_000
-            
-            
-
+            max_params = 1_000_000   
 
 
         target_acc= 100
         min_width=  16
         max_width= 2048
-        #width_resolution = 64
         depth_resolution = 4
         min_depth= 8
         max_depth= 100
         max_epochs =50
-        Rand_train = 3
-        max_models = 5
+        Rand_train = 5
+        max_models = 9
         
         r1_thresh = 0.05
         r2_thresh = 0.10
@@ -315,41 +327,39 @@ class NAS:
         bst_vac = []
         bst_prm = []
 
-        # Baseline Model 
-        curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
-        #curr_arch_ops = next_arch_ops = np.ones((layers,), dtype=int)
 
-        curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
+        # Train Baseline Model
         curr_arch_train_acc = next_arch_train_acc = 0.0
         curr_arch_test_acc = next_arch_test_acc = 0.0
-
-        model = NetworkMix(channels,self.metadata, layers, curr_arch_ops, curr_arch_kernel)          
-        logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
-        logging.info("Model Parameters = %f", general_num_params(model))
         logging.info('Evaluating Baseline Model...')
+        model = self.get_candidate_model(layers, channels)
+        logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
+
         curr_arch_train_acc, curr_arch_test_acc  = self.train(epochs, model, 'baseline')
-        self.save_checkpoint(self.best_model, self.epochs) # Baseline model
+        self.save_checkpoint(self.best_model, self.epochs) 
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
-        arr = np.linspace(general_num_params(model), max_params, max_models, dtype=int)
 
+        # Create equally spaced models with respect to parameters
+        arr = np.linspace(general_num_params(model), max_params, max_models, dtype=int)
         candidate_layers = []
         candidate_channels = []
         candidate_params = []
-        for i in range(1,len(arr)):
-            
+
+        for i in range(1,len(arr)):            
             #logging.info("Required Depth and Width for Model Parameters = %s", arr[i])
-            
             ch_up = True
             ly_up = True
 
             while(general_num_params(model) < arr[i]):
                 if ch_up:
-                    channels+= 4
+                    channels+= 8
                     ch_up=False
                 else:
                     layers+=1
+
                     ch_up=True
+
 
                 curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
                 curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
@@ -361,113 +371,73 @@ class NAS:
             candidate_layers.append(layers)
             candidate_channels.append(channels)    
             candidate_params.append(last_model_params)
-
-            #logging.info("Model Depth %s Model Width %s Model Parameters %s", layers, channels, last_model_params)
-            #logging.info("Model Parameters = %f", last_model_params)    
+   
         logging.info('Required Parameters Layers: %s', arr[1:])
-
         logging.info('Candidate Layers: %s', candidate_layers)
         logging.info('Candidate Channels: %s', candidate_channels)
         logging.info('Candidate Params: %s', candidate_params)
-        log_lines(10)
+        log_lines(2)
 
 
         
-        
+        # Initiate Search Phase 1
         self.best_model_rand = self.best_model
         self.best_epoch_rand = self.epochs
         # SEARCH MODEL
         epochs_up = False
-        candidate_count = 0
+        candidate_count = 0 # Independent Repeat Model Counter
+        candidate_num = 0 # Loop Iterator
 
-        candidate_num = 0
-        # Phase 1: Main architecture search
         while (curr_arch_test_acc < target_acc):
             
             torch.cuda.empty_cache()
-            # Check if phase 1 time limit is exceeded
             if self.phase1_time_out:
                 self.phase1_time_out = False
                 break
             
-            # The possibility exists if trained for too long.
             if (curr_arch_train_acc >= 99):
                 break;  
-
-            if ((layers >= max_depth and channels >=max_width) or epochs >= max_epochs):
-            #if epochs >= max_epochs:    
-                break;
                                 
             if epochs_up and epochs < max_epochs:                                
                 epochs = epochs + add_epochs
                 epochs_up = False
 
             if candidate_num < len(candidate_layers):
-
                 layers = candidate_layers[candidate_num]
                 channels = candidate_channels[candidate_num]
             else:
                 break
 
-
-            logging.info('#############################################################################')
+            log_lines(2)
             logging.info('Moving to Next Candidate Architecture...')
-
-            
-
-
             logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
 
-            archbestt, archbestv = 0.0, 0.0
-            next_arch_ops = np.zeros((layers,), dtype=int)
-            #next_arch_ops = np.ones((layers,), dtype=int)
+            archbestt = curr_arch_train_acc
+            archbestv = curr_arch_test_acc            
 
-            next_arch_kernel = 3*np.ones((layers,), dtype=int)
-            logging.info(f"NetworkMix parameters: channels={channels}, layers={layers}, mixnet_code={next_arch_ops}, k_size={next_arch_kernel}, input_shape={self.metadata.get('input_shape')}, num_classes={self.metadata.get('num_classes')}")
-
-            model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)  # Create candidate model
-            num_params = general_num_params(model)  # Get model parameter count
-            logging.info("Model Parameters = %f", num_params)  # Log model size
-            # Estimate memory usage: params + activations (rough estimate)
-            input_shape = self.metadata.get('input_shape', (1, channels, 128, 128))  # Use metadata or default
-            batch_size = self.train_loader.batch_size if hasattr(self.train_loader, 'batch_size') else 16  # Get batch size
-            # Estimate memory: params + activations (float32=4 bytes)
-            param_mem = num_params * 4 / 1024**2  # MB
-            activation_mem = batch_size * np.prod(input_shape[1:]) * 4 / 1024**2  # MB
-            total_mem = param_mem + activation_mem
-            logging.info(f"Estimated GPU/CPU memory usage: params={param_mem:.2f}MB, activations={activation_mem:.2f}MB, total={total_mem:.2f}MB")  # Log memory estimate
-            #log_networkmix_layer_outputs(model, self.metadata)  # Log layer outputs
-            #if general_num_params(model) > max_params:
-            #    logging.info("Model Parameters Exceed Upper Bound")
-            #    break;
-                
             # Training same candidate with multiple initializations.    
             for i in range(Rand_train):
-                torch.cuda.empty_cache()
-                    
+                torch.cuda.empty_cache()                    
                 set_seed(i)
-
-
                 logging.info("INITIALIZING RUNNUNG RUN %f", i) 
-                model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)             
-
+                model = self.get_candidate_model(layers, channels)             
                 next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase1')
-                if next_arch_test_acc == 0.0 and next_arch_train_acc == 0.0:
-                    break
-                if next_arch_test_acc > archbestv:
+
+                if next_arch_test_acc > archbestv + r1_thresh:
                     archbestt = next_arch_train_acc
                     archbestv = next_arch_test_acc
                     self.best_model_rand = self.best_model
                     self.best_epoch_rand = self.epochs
-
+                    break                  
                 logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
-            if next_arch_test_acc == 0.0 and next_arch_train_acc == 0.0:
-                break
+                log_lines(1) 
+
+
             # As long as we get significant improvement by increasing depth.
             
-            next_arch_train_acc = archbestt
-            next_arch_test_acc = archbestv
-            logging.info("Candidate Best Train %f Candidate Best Val %f", next_arch_train_acc, next_arch_test_acc)
+            #next_arch_train_acc = archbestt
+            #next_arch_test_acc = archbestv
+            #logging.info("Candidate Best Train %f Candidate Best Val %f", next_arch_train_acc, next_arch_test_acc)
 
             if (next_arch_test_acc > curr_arch_test_acc + r1_thresh):
 
