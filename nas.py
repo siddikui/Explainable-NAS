@@ -65,7 +65,7 @@ class NAS:
         log_lines(2)
 
     
-        search_size = 0.99
+        search_size = 0.125
         
         data = train_loader.dataset.x  # The data samples
         labels = train_loader.dataset.y
@@ -291,7 +291,7 @@ class NAS:
         elif min_dim >= 48:
             max_params = 3_000_000
         elif min_dim >=  24:
-            max_params = 2_500_000
+            max_params = 1_500_000
         elif min_dim >= 12:
             max_params = 1_500_000    
         else:
@@ -305,11 +305,11 @@ class NAS:
         min_depth= 8
         max_depth= 100
         max_epochs =50
-        Rand_train = 5
-        max_models = 9
+        Rand_train = 2
+        max_models = 5
         
-        r1_thresh = 0.05
-        r2_thresh = 0.10
+        r1_thresh = 0.02
+        r2_thresh = 0.05
 
         channels = f_channels = min_width#16 
         layers = min_depth
@@ -515,34 +515,26 @@ class NAS:
         ###################################################################################
         ########### HYPER PARAMETER SEARCH BEGINS ############################
         
-        Rand_train = 3
+        Rand_train = 2
         candidate_count = 0
-        # Phase 2: Hyperparameter search/refinement
         
         self.search_end = time.time()  # Track search start time for time limit enforcement
         
         phase1_time = self.search_end - self.search_start
         logging.info(f"Phase 1 Search Time: {phase1_time})")
         
-
-
-        
         self.phase2_time_limit = self.total_time_limit - phase1_time
         self.phase2_time_limit -= self.extra_time
 
         logging.info(f"Phase 2 Allocated Time: {self.phase2_time_limit})")
         
-
-        
-        
-        iter_phase2 = 0
         while len(bst_dep) > 1:
             
-            iter_phase2 +=1
             # Check if phase 2 time limit is exceeded
             if self.phase2_time_out:
                 self.phase2_time_out = False
                 break
+
             bst_dep_2 = []
             bst_wdt_2 = []
             bst_epc_2 = []
@@ -550,66 +542,62 @@ class NAS:
             bst_vac_2 = []
             bst_prm_2 = []
 
-            #if candidate_count > max_models:
-            #    break
-            for i in range(len(bst_dep)):
-                layers = bst_dep[len(bst_dep)-2-i]
-                channels = bst_wdt[len(bst_wdt)-2-i]
+            epochs_up = False
 
-                if layers <= 8:
-                    pass
+            #for i in range(len(bst_dep)):
 
-                if i == 0:
-                    epochs = max(f_epochs,bst_epc[len(bst_epc)-1]) + 1
+            i = 0
+            while(i < len(bst_dep)):    
+                logging.info("Loop Counter %s ", i)
+
+                if epochs_up is False:
+                    layers = bst_dep[len(bst_dep)-2-i]
+                    channels = bst_wdt[len(bst_wdt)-2-i]
+
+                    if i == 0:
+                        epochs = max(f_epochs,bst_epc[len(bst_epc)-1]) + 1
+                    else:
+                        epochs = bst_epc[len(bst_epc)-1] + i + 1
                 else:
-                    epochs = bst_epc[len(bst_epc)-1] + i + 1
-                    #epochs = epochs + iter_phase2
+                    epochs = epochs + 1
                 
-                archbestt, archbestv = 0.0, 0.0                
+                archbestt = curr_arch_train_acc
+                archbestv = curr_arch_test_acc        
 
-                next_arch_ops = np.zeros((layers,), dtype=int)
-                #next_arch_ops = np.ones((layers,), dtype=int)
+                model = self.get_candidate_model(layers, channels)         
 
-                next_arch_kernel = 3*np.ones((layers,), dtype=int)
-                model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)                             
-                
+            
                 logging.info('Moving to Next Candidate Architecture...')
-                logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
-                logging.info("Model Parameters = %f", general_num_params(model))
-                #log_networkmix_layer_outputs(model, self.metadata)
+                logging.info("Model Depth %s Model Width %s ", layers, channels)
 
 
-
-                for i in range(Rand_train):
+                for j in range(Rand_train):
                     torch.cuda.empty_cache()
                     if self.phase2_time_limit is not None and (time.time() - self.search_end) > self.phase2_time_limit:
                         logging.info(f"Phase 2 (hyperparameter search) time limit of {self.phase2_time_limit/60:.2f} min exceeded. Stopping search.")
                         break
-                    set_seed(i)
+                    set_seed(j)
 
-
-                    logging.info("INITIALIZING RUNNUNG RUN %f", i) 
-                    model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)             
+                    logging.info("INITIALIZING RUNNUNG RUN %f", j) 
+                    model = self.get_candidate_model(layers, channels)             
 
                     next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase2')
 
-                    if next_arch_test_acc > archbestv:
+                    if next_arch_test_acc > curr_arch_test_acc + r2_thresh:
                         archbestt = next_arch_train_acc
                         archbestv = next_arch_test_acc
                         self.best_model_rand = self.best_model
                         self.best_epoch_rand = self.epochs
+                        break
                     logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
             
             
-            
-                next_arch_train_acc = archbestt
-                next_arch_test_acc = archbestv
-                logging.info("Candidate Best Train %f Candidate Best Val %f", next_arch_train_acc, next_arch_test_acc)
-
-                candidate_count += 1
-
+                #next_arch_train_acc = archbestt
+                #next_arch_test_acc = archbestv
+                #logging.info("Candidate Best Train %f Candidate Best Val %f", next_arch_train_acc, next_arch_test_acc)
 
                 if (next_arch_test_acc > curr_arch_test_acc + r2_thresh):
+                    i+=1
                     self.save_checkpoint(self.best_model_rand, self.best_epoch_rand)
 
                     # update current architecture.
@@ -640,10 +628,24 @@ class NAS:
                     logging.info('Best Arch Val Acc: %s', bst_vac_2)
                     logging.info('Best Arch Params: %s', bst_prm_2)
 
+                    candidate_count = 0
+                    epochs_up = False
+
                 else:
+                    candidate_count += 1
+
+
                     logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
                     logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
                     logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
+                    
+                    if candidate_count < 3:
+                        epochs_up=True
+                        
+                    else:
+                        i+=1
+                        candidate_count = 0 
+
                 logging.info('#############################################################################')
 
             bst_dep = bst_dep_2
@@ -670,7 +672,7 @@ class NAS:
         logging.info('Discovered Final Width %s', f_channels)
         logging.info('Discovered Final Epochs %s', f_epochs)
 
-        log_lines(10)
+        log_lines(4)
         
         phase2_time_taken = time.time() - self.search_end
         logging.info(f"Phase 2 Taken Time: {phase2_time_taken})")
