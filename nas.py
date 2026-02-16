@@ -65,7 +65,7 @@ class NAS:
         log_lines(2)
 
     
-        search_size = 0.125
+        search_size = 0.5
         
         data = train_loader.dataset.x  # The data samples
         labels = train_loader.dataset.y
@@ -291,7 +291,7 @@ class NAS:
         elif min_dim >= 48:
             max_params = 3_000_000
         elif min_dim >=  24:
-            max_params = 1_500_000
+            max_params = 2_500_000
         elif min_dim >= 12:
             max_params = 1_500_000    
         else:
@@ -305,11 +305,11 @@ class NAS:
         min_depth= 8
         max_depth= 100
         max_epochs =50
-        Rand_train = 2
-        max_models = 5
+        Rand_train = 5
+        max_models = 9
         
-        r1_thresh = 0.02
-        r2_thresh = 0.05
+        r1_thresh = 0.05
+        r2_thresh = 0.1
 
         channels = f_channels = min_width#16 
         layers = min_depth
@@ -515,7 +515,7 @@ class NAS:
         ###################################################################################
         ########### HYPER PARAMETER SEARCH BEGINS ############################
         
-        Rand_train = 2
+        Rand_train = 5
         candidate_count = 0
         
         self.search_end = time.time()  # Track search start time for time limit enforcement
@@ -559,7 +559,8 @@ class NAS:
                     else:
                         epochs = bst_epc[len(bst_epc)-1] + i + 1
                 else:
-                    epochs = epochs + 1
+                    #epochs = epochs + 1
+                    epochs = max(epochs,bst_epc[len(bst_epc)-1]) + 1
                 
                 archbestt = curr_arch_train_acc
                 archbestv = curr_arch_test_acc        
@@ -644,6 +645,7 @@ class NAS:
                         
                     else:
                         i+=1
+                        epochs_up = False
                         candidate_count = 0 
 
                 logging.info('#############################################################################')
