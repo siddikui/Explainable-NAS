@@ -14,6 +14,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset
 from collections import Counter
 
+import shutil
 
 import subprocess
 import json
@@ -67,7 +68,7 @@ class NAS:
     
         search_size = 0.5
         
-        data = train_loader.dataset.x  # The data samples
+        # data = train_loader.dataset.x  # The data samples
         labels = train_loader.dataset.y
         
         train_indices, val_indices = train_test_split(range(len(labels)),
@@ -79,14 +80,14 @@ class NAS:
 
                                                       
         train_subset = Subset(train_loader.dataset, train_indices)
-        val_subset = Subset(train_loader.dataset, val_indices) 
+        # val_subset = Subset(train_loader.dataset, val_indices) 
         
         train_loader = torch.utils.data.DataLoader(train_subset, 
                                                           batch_size=64, 
                                                           drop_last=True,
                                                           shuffle=True)
                                                           
-        val_loader_subset = torch.utils.data.DataLoader(val_subset, batch_size=64, shuffle=False)       
+        # val_loader_subset = torch.utils.data.DataLoader(val_subset, batch_size=64, shuffle=False)       
         
 
 
@@ -175,14 +176,20 @@ class NAS:
     
 
     
-    def train(self, epochs, model, phase_check):
+    def train(self, epochs, model, phase_check,  layers=None, channels=None, seed=None):
     
         self.model = model.to(self.device)  # Always move model to the selected device (CPU or GPU)
         self.epochs = epochs  # Set number of epochs
         self.optimizer = optim.SGD(self.model.parameters(), lr=.01, momentum=.9, weight_decay=3e-4)  
         self.criterion = nn.CrossEntropyLoss()  # Set loss function
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.epochs*20) 
-
+        if layers is not None and channels is not None:
+            start_epoch = self.load_checkpoint_if_exists(
+                        model, self.optimizer, self.scheduler,
+                        layers, channels, seed, epochs
+                    )
+        else:
+            start_epoch = 0
         # Log device info for worst-case runtime estimation
         if self.device.type == 'cuda':
             logging.info('Running on GPU (CUDA)')
@@ -192,13 +199,13 @@ class NAS:
         t_start = time.time()
         best_valid_acc = 0.0  # Track best validation accuracy
         best_train_acc = 0.0  # Track best training accuracy
-        best_epoch = 0  # Track best epoch
+        # best_epoch = 0  # Track best epoch
         self.best_model = None  # Track best model
         batch_size = self.train_loader.batch_size if hasattr(self.train_loader, 'batch_size') else 16  # Get initial batch size
        
         try:
             
-            for epoch in range(epochs):
+            for epoch in range(start_epoch, epochs):
                 #check time
                 if phase_check == 'phase1':
                     if self.phase1_time_limit is not None and (time.time() - self.search_start) > self.phase1_time_limit:
@@ -281,10 +288,10 @@ class NAS:
 
         
         min_dim = min(self.metadata['input_shape'][2],self.metadata['input_shape'][3])
-        max_dim = max(self.metadata['input_shape'][2],self.metadata['input_shape'][3])
-        data_channels = self.metadata['input_shape'][1]
+        # max_dim = max(self.metadata['input_shape'][2],self.metadata['input_shape'][3])
+        # data_channels = self.metadata['input_shape'][1]
 
-        total_input_pts = self.metadata['input_shape'][1]*self.metadata['input_shape'][2]*self.metadata['input_shape'][3]
+        # total_input_pts = self.metadata['input_shape'][1]*self.metadata['input_shape'][2]*self.metadata['input_shape'][3]
 
         if min_dim >= 96: #if input > 3x64x64
             max_params = 3_500_000
@@ -300,25 +307,25 @@ class NAS:
 
         target_acc= 100
         min_width=  16
-        max_width= 2048
-        depth_resolution = 4
+        # max_width= 2048
+        # depth_resolution = 4
         min_depth= 8
-        max_depth= 100
-        max_epochs =50
-        Rand_train = 5
-        max_models = 9
+        # max_depth= 100
+        max_epochs =20
+        Rand_train = 2
+        max_models = 5
         
         r1_thresh = 0.05
         r2_thresh = 0.1
 
-        channels = f_channels = min_width#16 
+        channels =  min_width#16 
         layers = min_depth
         
         add_epochs = 1# 1
-        s_epoch = epochs = 2#1
+        epochs = 2#1
         f_epochs = 0
 
-        macro_count = 0
+        # macro_count = 0
 
         bst_dep = []
         bst_wdt = []
@@ -327,16 +334,34 @@ class NAS:
         bst_vac = []
         bst_prm = []
 
+        bst_dep_2 = []
+        bst_wdt_2 = []
+        bst_epc_2 = []
+        bst_tac_2 = []
+        bst_vac_2 = []
+        bst_prm_2 = []
+
 
         # Train Baseline Model
         curr_arch_train_acc = next_arch_train_acc = 0.0
         curr_arch_test_acc = next_arch_test_acc = 0.0
+        # To track best model during search phase 1 and 2
+        self.best_val = 0.0
+        self.best_layers = layers
+        self.best_channels = channels
+        self.best_epoch = epochs
+
         logging.info('Evaluating Baseline Model...')
         model = self.get_candidate_model(layers, channels)
         logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
 
-        curr_arch_train_acc, curr_arch_test_acc  = self.train(epochs, model, 'baseline')
-        self.save_checkpoint(self.best_model, self.epochs) 
+        curr_arch_train_acc, curr_arch_test_acc  = self.train(epochs, model, 'baseline',
+                                                                layers=layers,
+                                                                channels=channels,
+                                                                seed='-')
+        # self.save_checkpoint(self.best_model, self.epochs) 
+        self.save_checkpoint(self.best_model, epoch=epochs, layers=layers, channels=channels, seed='baseline')
+
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
 
@@ -349,7 +374,7 @@ class NAS:
         for i in range(1,len(arr)):            
             #logging.info("Required Depth and Width for Model Parameters = %s", arr[i])
             ch_up = True
-            ly_up = True
+            # ly_up = True
 
             while(general_num_params(model) < arr[i]):
                 if ch_up:
@@ -377,7 +402,7 @@ class NAS:
         logging.info('Candidate Channels: %s', candidate_channels)
         logging.info('Candidate Params: %s', candidate_params)
         log_lines(2)
-
+        
 
         
         # Initiate Search Phase 1
@@ -387,7 +412,7 @@ class NAS:
         epochs_up = False
         candidate_count = 0 # Independent Repeat Model Counter
         candidate_num = 0 # Loop Iterator
-
+        candidate_count_limit = 2
         while (curr_arch_test_acc < target_acc):
             
             torch.cuda.empty_cache()
@@ -411,27 +436,39 @@ class NAS:
             log_lines(2)
             logging.info('Moving to Next Candidate Architecture...')
             logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
-
-            archbestt = curr_arch_train_acc
+            log_networkmix_layer_outputs(model, self.metadata) 
+            # archbestt = curr_arch_train_acc
             archbestv = curr_arch_test_acc            
-
-            # Training same candidate with multiple initializations.    
+            # Training same candidate with multiple initializations.   
+            best_model_seed = None
+            best_seed_acc = 0.0
+            best_seed = None
             for i in range(Rand_train):
                 torch.cuda.empty_cache()                    
                 set_seed(i)
                 logging.info("INITIALIZING RUNNUNG RUN %f", i) 
                 model = self.get_candidate_model(layers, channels)             
-                next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase1')
+                next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase1',
+                                                                    layers=layers,
+                                                                    channels=channels,
+                                                                    seed=i
+                                                                )
+                if next_arch_test_acc > best_seed_acc:
+                    best_seed_acc = next_arch_test_acc
+                    best_model_seed = copy.deepcopy(self.best_model)
+                    best_seed = i
 
                 if next_arch_test_acc > archbestv + r1_thresh:
                     archbestt = next_arch_train_acc
                     archbestv = next_arch_test_acc
                     self.best_model_rand = self.best_model
                     self.best_epoch_rand = self.epochs
-                    break                  
+
+                    break
+                       
                 logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
                 log_lines(1) 
-
+            self.save_checkpoint(best_model_seed, epoch=epochs, layers=layers, channels=channels, seed=best_seed)
 
             # As long as we get significant improvement by increasing depth.
             
@@ -447,10 +484,13 @@ class NAS:
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
                 curr_arch_train_acc = next_arch_train_acc
                 curr_arch_test_acc = next_arch_test_acc
-                f_channels = channels
-                f_epochs = epochs
-                s_epoch = self.best_epoch
-                self.save_checkpoint(self.best_model_rand, self.best_epoch_rand)
+                
+                if next_arch_test_acc > self.best_val:
+                    self.best_val = next_arch_test_acc
+                    self.best_layers = layers
+                    self.best_channels = channels
+                    self.best_epoch = epochs
+                # self.save_checkpoint(self.best_model_rand, self.best_epoch_rand)
                 #self.save_checkpoint(model, epochs)
 
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
@@ -481,7 +521,7 @@ class NAS:
                 logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
                 logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
 
-                if candidate_count < 3:
+                if candidate_count < candidate_count_limit:
                     epochs_up=True
                 else:
                     candidate_num += 1   
@@ -491,12 +531,10 @@ class NAS:
         # Search width
         # During width search lenght of curr_arch_ops and curr_arch_kernel shall not change but only channels.
 
-        f_layers = len(curr_arch_ops) # discovered final number of layers
 
-
-        logging.info('Discovered Depth %s', f_layers)
-        logging.info('Discovered Width %s', f_channels)
-        logging.info('Discovered Epochs %s best saved epoch %s', f_epochs, s_epoch)
+        logging.info('Discovered Depth %s', self.best_layers)
+        logging.info('Discovered Width %s', self.best_channels)
+        logging.info('Discovered Epochs %s best saved epoch %s', self.best_epoch, self.best_epoch)
 
 
         logging.info('#############################################################################')
@@ -515,7 +553,7 @@ class NAS:
         ###################################################################################
         ########### HYPER PARAMETER SEARCH BEGINS ############################
         
-        Rand_train = 5
+        Rand_train = 2
         candidate_count = 0
         
         self.search_end = time.time()  # Track search start time for time limit enforcement
@@ -528,6 +566,10 @@ class NAS:
 
         logging.info(f"Phase 2 Allocated Time: {self.phase2_time_limit})")
         
+
+        
+        
+        # iter_phase2 = 0
         while len(bst_dep) > 1:
             
             # Check if phase 2 time limit is exceeded
@@ -535,12 +577,6 @@ class NAS:
                 self.phase2_time_out = False
                 break
 
-            bst_dep_2 = []
-            bst_wdt_2 = []
-            bst_epc_2 = []
-            bst_tac_2 = []
-            bst_vac_2 = []
-            bst_prm_2 = []
 
             epochs_up = False
 
@@ -562,7 +598,7 @@ class NAS:
                     #epochs = epochs + 1
                     epochs = max(epochs,bst_epc[len(bst_epc)-1]) + 1
                 
-                archbestt = curr_arch_train_acc
+                # archbestt = curr_arch_train_acc
                 archbestv = curr_arch_test_acc        
 
                 model = self.get_candidate_model(layers, channels)         
@@ -570,7 +606,10 @@ class NAS:
             
                 logging.info('Moving to Next Candidate Architecture...')
                 logging.info("Model Depth %s Model Width %s ", layers, channels)
-
+                
+                best_model_seed = None
+                best_seed_acc = 0.0
+                best_seed = None
 
                 for j in range(Rand_train):
                     torch.cuda.empty_cache()
@@ -582,16 +621,28 @@ class NAS:
                     logging.info("INITIALIZING RUNNUNG RUN %f", j) 
                     model = self.get_candidate_model(layers, channels)             
 
-                    next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase2')
+                    next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase2',
+                                                                    layers=layers,
+                                                                    channels=channels,
+                                                                    seed=i
+                                                                )
+                    if next_arch_test_acc > best_seed_acc:
+                        best_seed_acc = next_arch_test_acc
+                        best_model_seed = copy.deepcopy(self.best_model)
+                        best_seed = i
 
                     if next_arch_test_acc > curr_arch_test_acc + r2_thresh:
-                        archbestt = next_arch_train_acc
+                        # archbestt = next_arch_train_acc
                         archbestv = next_arch_test_acc
                         self.best_model_rand = self.best_model
                         self.best_epoch_rand = self.epochs
                         break
                     logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
-            
+                if self.phase2_time_limit is not None and (time.time() - self.search_end) > self.phase2_time_limit:
+                    pass
+                else:
+                    self.save_checkpoint(best_model_seed, epoch=epochs, layers=layers, channels=channels, seed=best_seed)
+
             
                 #next_arch_train_acc = archbestt
                 #next_arch_test_acc = archbestv
@@ -599,14 +650,17 @@ class NAS:
 
                 if (next_arch_test_acc > curr_arch_test_acc + r2_thresh):
                     i+=1
-                    self.save_checkpoint(self.best_model_rand, self.best_epoch_rand)
+                    # self.save_checkpoint(self.best_model_rand, self.best_epoch_rand)
 
                     # update current architecture.
                     curr_arch_ops = next_arch_ops
                     curr_arch_kernel = next_arch_kernel
-                    f_layers = len(curr_arch_ops)
-                    f_channels = channels
-                    f_epochs = epochs
+                    if next_arch_test_acc > self.best_val:
+                        self.best_val = next_arch_test_acc
+                        self.best_layers = layers
+                        self.best_channels = channels
+                        self.best_epoch = epochs
+
 
                     logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
                     logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
@@ -670,19 +724,32 @@ class NAS:
             ###################################################################################
             ###################################################################################
             ########### HYPER PARAMETER SEARCH ENDS ############################
-        logging.info('Discovered Final Depth %s', f_layers)
-        logging.info('Discovered Final Width %s', f_channels)
-        logging.info('Discovered Final Epochs %s', f_epochs)
+        logging.info('Discovered Final Depth %s', self.best_layers)
+        logging.info('Discovered Final Width %s', self.best_channels)
+        logging.info('Discovered Final Epochs %s', self.best_epoch)
 
         log_lines(4)
         
         phase2_time_taken = time.time() - self.search_end
         logging.info(f"Phase 2 Taken Time: {phase2_time_taken})")
 
-        return curr_arch_ops, curr_arch_kernel, f_channels, f_layers
-        
-        '''
-        '''
+        final_ckpt = self.get_checkpoint_path(
+            layers=self.best_layers,
+            channels=self.best_channels
+        )
+        dst = os.path.join(
+            os.path.dirname(final_ckpt),  # current folder
+            "..",                         # go up one level
+            self.metadata["codename"] + ".pth"
+        )
+
+        dst = os.path.abspath(dst)
+        shutil.copyfile(final_ckpt, dst)
+
+        print("Copied and renamed to:", dst)
+
+        return curr_arch_ops, curr_arch_kernel, self.best_channels, self.best_layers 
+ 
     def evaluate(self):
         self.model.eval()
         labels, predictions = [], []
@@ -694,14 +761,66 @@ class NAS:
             predictions += torch.argmax(output, 1).detach().cpu().tolist()
         return accuracy_score(labels, predictions)
 
-    def save_checkpoint(self, model, epoch):
+    def save_checkpoint(self, model, epoch, layers, channels, seed):
+        logging.info(f"Saving checkpoint for layers={layers}, channels={channels}, seed={seed}")
+        path = self.get_checkpoint_path(layers, channels)
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)  # ensure folder exists
+
         torch.save({
-            'architecture':model,
+            'layers': layers,
+            'channels': channels,
+            'seed': seed,
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-        }, self.metadata["codename"]+".pth")
-        print(f"Checkpoint saved to {self.metadata['codename']}.pth")
+            'model': model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.scheduler.state_dict(),
+        }, path)
+
+        logging.info(f"Checkpoint saved: {path}")
+
+    def load_checkpoint_if_exists(self, model, optimizer, scheduler,
+                              layers, channels, seed, epochs):
+    
+        path = self.get_checkpoint_path(layers, channels)
+        
+        if os.path.exists(path):
+            ckpt = torch.load(path, map_location=self.device)
+            if ckpt['layers'] != layers:
+                return 0
+            if ckpt['channels'] != channels:
+                return 0
+            if ckpt['epoch'] == (epochs):
+                return 0
+            logging.info(f"Found checkpoint at {path} with layers={ckpt['layers']}, channels={ckpt['channels']}, seed={ckpt['seed']}")
+
+            model.load_state_dict(ckpt['model'])
+            optimizer.load_state_dict(ckpt['optimizer'])
+            scheduler.load_state_dict(ckpt['scheduler'])
+            
+            model.eval()
+            with torch.no_grad():
+                resumed_acc = self.evaluate()
+
+            logging.info(f"Resumed model validation accuracy: {resumed_acc*100:.2f}%")
+            start_epoch = ckpt['epoch']
+            return start_epoch
+        else:
+            logging.info(f"No checkpoint found for layers={layers}, channels={channels}, seed={seed}")
+
+        return 0
+
+
+
+    def get_checkpoint_if_exists(self, layers, channels, seed):
+        path = self.get_checkpoint_path(layers, channels)
+        if os.path.exists(path):
+            return torch.load(path, map_location='cpu')
+        return None
+    
+    def get_checkpoint_path(self, layers=None, channels=None):
+        if layers is not None and channels is not None:
+            return f"checkpoints/ckpt_{self.metadata['codename']}_L{layers}_C{channels}.pt"
 
     def search(self):
        
