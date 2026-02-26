@@ -18,7 +18,7 @@ from data_processor import DataProcessor
 from trainer import Trainer
 
 #Time limit in hours
-TIME_LIMIT = 32
+TIME_LIMIT = 72
 
 # === DATA LOADING HELPERS =============================================================================================
 # find the dataset filepaths
@@ -185,6 +185,7 @@ def run_submission(runclock:Clock):
                 pkl.dump(run_data, f)
             np.save('predictions/{}.npy'.format(metadata['codename']), predictions)
             '''
+            
             
             
             print("Model Training and Prediction Complete")

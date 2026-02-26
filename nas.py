@@ -66,7 +66,7 @@ class NAS:
         log_lines(2)
 
     
-        search_size = 0.5
+        search_size = 0.99
         
         # data = train_loader.dataset.x  # The data samples
         labels = train_loader.dataset.y
@@ -304,16 +304,18 @@ class NAS:
         else:
             max_params = 1_000_000   
 
-
+        max_params = 2_500_000 # OverRide
+        
+        
         target_acc= 100
         min_width=  16
         # max_width= 2048
         # depth_resolution = 4
         min_depth= 8
         # max_depth= 100
-        max_epochs =20
-        Rand_train = 2
-        max_models = 5
+        max_epochs =50
+        Rand_train = 7
+        max_models = 5 # 8 Models Max
         
         r1_thresh = 0.05
         r2_thresh = 0.1
@@ -436,7 +438,7 @@ class NAS:
             log_lines(2)
             logging.info('Moving to Next Candidate Architecture...')
             logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
-            log_networkmix_layer_outputs(model, self.metadata) 
+            #log_networkmix_layer_outputs(model, self.metadata) 
             # archbestt = curr_arch_train_acc
             archbestv = curr_arch_test_acc            
             # Training same candidate with multiple initializations.   
@@ -553,7 +555,7 @@ class NAS:
         ###################################################################################
         ########### HYPER PARAMETER SEARCH BEGINS ############################
         
-        Rand_train = 2
+        Rand_train = 3
         candidate_count = 0
         
         self.search_end = time.time()  # Track search start time for time limit enforcement
@@ -577,6 +579,13 @@ class NAS:
                 self.phase2_time_out = False
                 break
 
+            bst_dep_2 = []
+            bst_wdt_2 = []
+            bst_epc_2 = []
+            bst_tac_2 = []
+            bst_vac_2 = []
+            bst_prm_2 = []    
+
 
             epochs_up = False
 
@@ -591,9 +600,10 @@ class NAS:
                     channels = bst_wdt[len(bst_wdt)-2-i]
 
                     if i == 0:
-                        epochs = max(f_epochs,bst_epc[len(bst_epc)-1]) + 1
+                        epochs = max(epochs,bst_epc[len(bst_epc)-1]) + 1
                     else:
-                        epochs = bst_epc[len(bst_epc)-1] + i + 1
+                        #epochs = bst_epc[len(bst_epc)-1] + i + 1
+                        epochs = epochs + 1
                 else:
                     #epochs = epochs + 1
                     epochs = max(epochs,bst_epc[len(bst_epc)-1]) + 1
@@ -601,11 +611,11 @@ class NAS:
                 # archbestt = curr_arch_train_acc
                 archbestv = curr_arch_test_acc        
 
-                model = self.get_candidate_model(layers, channels)         
+                #model = self.get_candidate_model(layers, channels)         
 
             
                 logging.info('Moving to Next Candidate Architecture...')
-                logging.info("Model Depth %s Model Width %s ", layers, channels)
+                logging.info("Model Depth %s Model Width %s Epochs %s", layers, channels, epochs)
                 
                 best_model_seed = None
                 best_seed_acc = 0.0
@@ -624,12 +634,12 @@ class NAS:
                     next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase2',
                                                                     layers=layers,
                                                                     channels=channels,
-                                                                    seed=i
+                                                                    seed=j
                                                                 )
                     if next_arch_test_acc > best_seed_acc:
                         best_seed_acc = next_arch_test_acc
                         best_model_seed = copy.deepcopy(self.best_model)
-                        best_seed = i
+                        best_seed = j
 
                     if next_arch_test_acc > curr_arch_test_acc + r2_thresh:
                         # archbestt = next_arch_train_acc
