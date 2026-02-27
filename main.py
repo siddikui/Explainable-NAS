@@ -18,7 +18,7 @@ from data_processor import DataProcessor
 from trainer import Trainer
 
 #Time limit in hours
-TIME_LIMIT = 72
+TIME_LIMIT = 5
 
 # === DATA LOADING HELPERS =============================================================================================
 # find the dataset filepaths
@@ -168,7 +168,7 @@ def run_submission(runclock:Clock):
             model = NAS(train_loader, valid_loader, metadata, runclock).search()
             model_params = int(general_num_params(model))
             metadata['time_remaining'] = runclock.check()
-            '''
+            
             # train model using your Trainer
             print("\n=== Training ===")
             print("  Allotted compute time remaining: ~{}".format(show_time(runclock.check())))
@@ -184,8 +184,7 @@ def run_submission(runclock:Clock):
             with open("predictions/{}_stats.pkl".format(metadata['codename']), "wb") as f:
                 pkl.dump(run_data, f)
             np.save('predictions/{}.npy'.format(metadata['codename']), predictions)
-            '''
-            
+                
             
             
             print("Model Training and Prediction Complete")

@@ -66,7 +66,7 @@ class NAS:
         log_lines(2)
 
     
-        search_size = 0.99
+        search_size = 0.25
         
         # data = train_loader.dataset.x  # The data samples
         labels = train_loader.dataset.y
@@ -313,8 +313,8 @@ class NAS:
         # depth_resolution = 4
         min_depth= 8
         # max_depth= 100
-        max_epochs =50
-        Rand_train = 7
+        max_epochs = 30
+        Rand_train = 2
         max_models = 5 # 8 Models Max
         
         r1_thresh = 0.05
@@ -323,9 +323,8 @@ class NAS:
         channels =  min_width#16 
         layers = min_depth
         
-        add_epochs = 1# 1
-        epochs = 2#1
-        f_epochs = 0
+        add_epochs = 1 # 1
+        epochs = 2 #1
 
         # macro_count = 0
 
@@ -782,7 +781,7 @@ class NAS:
             'channels': channels,
             'seed': seed,
             'epoch': epoch,
-            'model': model.state_dict(),
+            'model_state_dict': model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'scheduler': self.scheduler.state_dict(),
         }, path)
@@ -804,7 +803,7 @@ class NAS:
                 return 0
             logging.info(f"Found checkpoint at {path} with layers={ckpt['layers']}, channels={ckpt['channels']}, seed={ckpt['seed']}")
 
-            model.load_state_dict(ckpt['model'])
+            model.load_state_dict(ckpt['model_state_dict'])
             optimizer.load_state_dict(ckpt['optimizer'])
             scheduler.load_state_dict(ckpt['scheduler'])
             
