@@ -5,6 +5,15 @@ import time
 import numpy as np
 import random
 import logging, sys, os
+from torch.nn import Module
+from torch.nn import Dropout
+from torch.nn import MaxPool2d
+from torch.nn import Sequential
+from torch.nn import Conv2d, Linear
+from torch.nn import BatchNorm1d, BatchNorm2d
+from torch.nn import ReLU, Sigmoid
+from torch.nn import PReLU
+
 # === MODEL ANALYSIS ===================================================================================================
 def general_num_params(model):
     # return number of differential parameters of input model
@@ -61,121 +70,204 @@ def red_blcks(input_shape):
     #print('Reduction Blocks: ', count) 
     return count
 
-class Conv(nn.Module):
-    
-  def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
-    super(Conv, self).__init__()
-    self.op = nn.Sequential(
 
-      nn.ReLU(inplace=False),
-      nn.Dropout(p=0.2),
-      nn.Conv2d(C_in, C_out, kernel_size=kernel_size, stride=stride, padding=padding, bias=False),      
-      nn.BatchNorm2d(C_out, affine=affine)
-      )
+class BackboneSearchClassifier(nn.Module):
+    def __init__(self, units, in_c, num_classes,
+                 input_channels, num_reductions):
+        super().__init__()
 
-  def forward(self, x):
-    return self.op(x)
+        self.backbone = BackboneSearch(
+            units=units,
+            in_c=in_c,
+            input_channels=input_channels,
+            num_reductions=num_reductions
+        )
 
-class SepConv(nn.Module):
-    
-  def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
-    super(SepConv, self).__init__()
-    self.op = nn.Sequential(
-      nn.ReLU(inplace=False),
-      nn.Dropout(p=0.2),
-      nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=stride, padding=padding, groups=C_in, bias=False),
-      nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),
-      nn.BatchNorm2d(C_out, affine=affine),
-      )
+        # --- dynamically infer feature size ---
+        self.backbone.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(2, input_channels, 28, 28)  # batch=2
+            feat, _ = self.backbone(dummy)
+            out_dim = feat.shape[1]
+        self.backbone.train()
 
-  def forward(self, x):
-    return self.op(x)
+
+        self.classifier = nn.Linear(out_dim, num_classes)
+
+    def forward(self, x):
+        feat, _ = self.backbone(x)
+        logits = self.classifier(feat)
+        return logits
 
 
 class NetworkMix(nn.Module):
+    def __init__(self, channels, metadata, layers, arch_ops, arch_kernel):
+        super().__init__()
 
-  def __init__(self, C, metadata, layers, mixnet_code, k_size):
-    start_layer = metadata['input_shape'][1]
-    num_classes = metadata['num_classes']
-    super(NetworkMix, self).__init__()
-    self._layers = layers
-    # input shape if min 48 then stem_multiplier is  0.25
-    # take min out of 3 and 4
-    #if metadata['input_shape'][2] > 64 or metadata['input_shape'][3] > 64:
-    #  stem_multiplier = 0.0625
-    if metadata['input_shape'][2] > 16 or metadata['input_shape'][3] > 16:
-      stem_multiplier = 0.25
-    else:
-      stem_multiplier = 0.50
+        input_channels = metadata["input_shape"][1]
+        num_classes = metadata["num_classes"]
 
-    C_curr = int(stem_multiplier*C)
-    #C_curr = int(stem_multiplier*start_layer)
-    self.stem = nn.Sequential(
-      nn.Conv2d(start_layer, C_curr, 3, padding=1, bias=False),
-      nn.BatchNorm2d(C_curr)
-    )
-    
+        # Depth search (NOT channels!)
+        units = {
+            'u1': 2,
+            'u2': 2,
+            'u3': 2,
+            'u4': 2
+        }
+        num_reductions = red_blcks(metadata["input_shape"])
+        self.model = BackboneSearchClassifier(
+            units=units,
+            in_c=channels,
+            num_classes=num_classes,
+            input_channels=input_channels,
+            num_reductions=num_reductions
+        )
 
-    C_prev, C_curr = C_curr, C_curr
-    
-    self.mixlayers = nn.ModuleList()
-    # reduction_prev = False
-    '''Number of reduction blocks return from the block calculation function
-    Genrate the list of of the reduction layers by using the totall nmber of layer
-    '''
-    num_reduction_blocks = red_blcks(metadata['input_shape'])
-    reduction_list = [i * layers // (num_reduction_blocks+1) for i in range(1, num_reduction_blocks+1)]
-    # Channel doubling logic: at each reduction block, channels double (C, 2C, 4C, ...)
-    channel_multiplier = 1
-    for i in range(layers):
-      if i in reduction_list:
-      
-        
-        if i != reduction_list[0]:
-          channel_multiplier *= 2  # Double channels at each reduction block
+    def forward(self, x):
+        return self.model(x)
+
+
+class BackboneSearch(nn.Module):
+    def __init__(self, units, in_c, input_channels, num_reductions):
+        super().__init__()
+
+        self.units = units
+        self.in_c = in_c
+
+        print("BackboneSearch: in_c = ", in_c)
+        print("BackboneSearch: num_reductions = ", num_reductions)
+        print("BackboneSearch: units = ", units)
+        print("BackboneSearch: input_channels = ", input_channels)
+
+        # -------- INPUT ----------
+        self.input_layer = nn.Sequential(
+            nn.Conv2d(input_channels, input_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(input_channels),
+            nn.PReLU(input_channels)
+        )
+
+        # -------- BODY ----------
+        stage_names = ['u1', 'u2', 'u3', 'u4']
+        downsample_stages = stage_names[:num_reductions]
+
+        modules = []
+        current_channels = input_channels
+        reduction_count = 0
+
+        print("\nStage | Channels")
+        print("------|---------")
+        print("Input |", current_channels)
+        for stage in stage_names:
+            for i in range(units[stage]):
+
+                if stage in downsample_stages and i == 0:
+                    stride = 2
+
+                    # FIRST reduction: jump to in_c
+                    if reduction_count == 0:
+                        out_channels = in_c
+                    else:
+                        out_channels = current_channels * 2
+
+                    reduction_count += 1
+                else:
+                    stride = 1
+                    out_channels = current_channels
+
+                modules.append(
+                    BasicBlockIR(
+                        current_channels,
+                        out_channels,
+                        stride
+                    )
+                )
+
+                current_channels = out_channels
+
+
+            print(stage, " |", current_channels)
+
+        self.body = nn.Sequential(*modules)
+
+        final_output_channel = current_channels
+        print("\nFinal output channels:", final_output_channel)
+
+        # -------- OUTPUT ----------
+        self.output_layer = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.BatchNorm2d(final_output_channel),
+            nn.Dropout(0.4),
+            Flatten(),
+            nn.Linear(final_output_channel, final_output_channel),
+            nn.BatchNorm1d(final_output_channel, affine=False)
+        )
+
+        initialize_weights(self.modules())
+
+    def forward(self, x):
+        x = self.input_layer(x)
+        x = self.body(x)
+        x = self.output_layer(x)
+
+        norm = torch.norm(x, 2, 1, True)
+        output = torch.div(x, norm)
+        return output, norm
+
+def initialize_weights(modules):
+    """ Weight initilize, conv2d and linear is initialized with kaiming_normal
+    """
+    for m in modules:
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight,
+                                    mode='fan_out',
+                                    nonlinearity='relu')
+            if m.bias is not None:
+                m.bias.data.zero_()
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight,
+                                    mode='fan_out',
+                                    nonlinearity='relu')
+            if m.bias is not None:
+                m.bias.data.zero_()
+
+                
+class Flatten(Module):
+    """ Flat tensor
+    """
+    def forward(self, input):
+        return input.view(input.size(0), -1)
+
+class BasicBlockIR(Module):
+    def __init__(self, in_channel, depth, stride):
+        super(BasicBlockIR, self).__init__()
+
+        # shortcut
+        if stride == 2 or in_channel != depth:
+            self.shortcut_layer = Sequential(
+                Conv2d(in_channel, depth, (1, 1), stride, bias=False),
+                BatchNorm2d(depth)
+            )
         else:
-          channel_multiplier = 1
-        '''  
-        
-        channel_multiplier *= 2
-        '''
-        C_curr = C * channel_multiplier
-        
-        reduction = True
-      else:
-        reduction = False
-      stride = 2 if reduction else 1
-      if k_size[i]==3:
-        pad=1
-      elif k_size[i]==5: 
-        pad=2
-      else:
-        pad=3
-      if mixnet_code[i] == 0:
-        mixlayer = SepConv(C_prev, C_curr, kernel_size=k_size[i], stride=stride, padding=pad, affine=True)
-      else:
-        mixlayer = Conv(C_prev, C_curr, kernel_size=k_size[i], stride=stride, padding=pad, affine=True)
-      self.mixlayers += [mixlayer]
-      C_prev = C_curr
+            self.shortcut_layer = nn.Identity()
 
-    self.global_pooling = nn.AdaptiveAvgPool2d(1)
-    self.classifier = nn.Linear(C_prev, num_classes)
+        # RES: channel change ONLY happens on strided conv
+        self.res_layer = Sequential(
+            BatchNorm2d(in_channel),
+            Conv2d(in_channel, in_channel, 3, 1, 1, bias=False),  # keep channels
+            BatchNorm2d(in_channel),
+            PReLU(in_channel),
 
-  def forward(self, x):
-    # print("Input shape:", x.shape)
+            Conv2d(in_channel, depth, 3, stride, 1, bias=False), # change channels here
+            BatchNorm2d(depth)
+        )
+    def forward(self, x):
+        shortcut = self.shortcut_layer(x)
+        res = self.res_layer(x)
 
-    x = self.stem(x)
-    # print("Stem output shape:", x.shape)
-
-    for i, mixlayer in enumerate(self.mixlayers):
-        x = mixlayer(x)
-        # print(f"MixLayer {i+1} output shape:", x.shape)
-
-    out = self.global_pooling(x)
-    # print("Global pooling output shape:", out.shape)
-    logits = self.classifier(out.view(out.size(0), -1))
-    # print("Logits output shape:", logits.shape)
-    return logits
+        return res + shortcut
 
 
 def set_seed(seed):
