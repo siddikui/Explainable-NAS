@@ -140,10 +140,12 @@ class BackboneSearch(nn.Module):
         print("BackboneSearch: input_channels = ", input_channels)
 
         # -------- INPUT ----------
+        # For small inputs with no reductions, use in_c as output channels
+        input_out_channels = in_c if num_reductions == 0 else input_channels
         self.input_layer = nn.Sequential(
-            nn.Conv2d(input_channels, input_channels, 3, 1, 1, bias=False),
-            nn.BatchNorm2d(input_channels),
-            nn.PReLU(input_channels)
+            nn.Conv2d(input_channels, input_out_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(input_out_channels),
+            nn.PReLU(input_out_channels)
         )
 
         # -------- BODY ----------
@@ -151,7 +153,7 @@ class BackboneSearch(nn.Module):
         downsample_stages = stage_names[:num_reductions]
 
         modules = []
-        current_channels = input_channels
+        current_channels = input_out_channels
         reduction_count = 0
 
         print("\nStage | Channels")
