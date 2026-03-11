@@ -71,6 +71,45 @@ def red_blcks(input_shape):
     return count
 
 
+def get_unit_distribution(layers, exp_ratio=4, starting_units=None):
+    """
+    Distributes total layers into 4 blocks (u1, u2, u3, u4).
+    Can optionally start from a different baseline.
+    """
+    # Inverse of the formula to get total units
+    total_units = (layers - 2) // 2
+    
+    # Allow custom starting point (defaults to 1,1,1,1)
+    if starting_units is None:
+        u1, u2, u3, u4 = 1, 1, 1, 1
+    else:
+        u1, u2, u3, u4 = starting_units['u1'], starting_units['u2'], starting_units['u3'], starting_units['u4']
+    
+    current_units = u1 + u2 + u3 + u4
+    
+    # Growth thresholds
+    u4_up = [30, 38, 46, 54, 62, 70, 78, 86, 94, 102]
+    u1_up = [32, 48, 64, 80, 96, 112]
+
+    # Calculate how many more units we need
+    units_to_add = total_units - current_units
+    
+    # Iteratively grow units
+    for i in range(1, units_to_add + 1):
+        # layers = (u1 + u2 + u3 + u4) * 2 + 2
+        
+        if layers in u4_up:
+            u4 += 1
+        elif layers in u1_up:
+            u1 += 1
+        elif i % exp_ratio == 0:
+            u2 += 1
+        else:
+            u3 += 1
+            
+    return {'u1': u1, 'u2': u2, 'u3': u3, 'u4': u4}
+
+
 class BackboneSearchClassifier(nn.Module):
     def __init__(self, units, in_c, num_classes,
                  input_channels, num_reductions):
@@ -107,13 +146,9 @@ class NetworkMix(nn.Module):
         input_channels = metadata["input_shape"][1]
         num_classes = metadata["num_classes"]
 
-        # Depth search (NOT channels!)
-        units = {
-            'u1': 2,
-            'u2': 2,
-            'u3': 2,
-            'u4': 2
-        }
+        units = get_unit_distribution(layers)
+        # units = get_unit_distribution(layers, starting_units={'u1':2, 'u2':3, 'u3':8, 'u4':2})
+        
         num_reductions = red_blcks(metadata["input_shape"])
         self.model = BackboneSearchClassifier(
             units=units,
@@ -134,10 +169,10 @@ class BackboneSearch(nn.Module):
         self.units = units
         self.in_c = in_c
 
-        print("BackboneSearch: in_c = ", in_c)
-        print("BackboneSearch: num_reductions = ", num_reductions)
-        print("BackboneSearch: units = ", units)
-        print("BackboneSearch: input_channels = ", input_channels)
+        logging.info("BackboneSearch: in_c = %d", in_c)
+        logging.info("BackboneSearch: num_reductions = %d", num_reductions)
+        logging.info("BackboneSearch: units = %s", str(units))
+        logging.info("BackboneSearch: input_channels = %d", input_channels)
 
         # -------- INPUT ----------
         # For small inputs with no reductions, use in_c as output channels
