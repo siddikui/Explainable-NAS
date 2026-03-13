@@ -70,45 +70,87 @@ def red_blcks(input_shape):
     #print('Reduction Blocks: ', count) 
     return count
 
+# def get_unit_distribution(layers, num_stages=4, exp_ratio=4):
+    
+#     total_units = (layers - 2) // 2
+#     units = {f'u{i+1}': 1 for i in range(num_stages)}
+    
+#     current_units = num_stages  # starts at 1 per stage
+#     units_to_add = total_units - current_units
 
-def get_unit_distribution(layers, exp_ratio=4, starting_units=None):
-    """
-    Distributes total layers into 4 blocks (u1, u2, u3, u4).
-    Can optionally start from a different baseline.
-    """
-    # Inverse of the formula to get total units
-    total_units = (layers - 2) // 2
-    
-    # Allow custom starting point (defaults to 1,1,1,1)
-    if starting_units is None:
-        u1, u2, u3, u4 = 1, 1, 1, 1
-    else:
-        u1, u2, u3, u4 = starting_units['u1'], starting_units['u2'], starting_units['u3'], starting_units['u4']
-    
-    current_units = u1 + u2 + u3 + u4
-    
-    # Growth thresholds
-    u4_up = [30, 38, 46, 54, 62, 70, 78, 86, 94, 102]
-    u1_up = [32, 48, 64, 80, 96, 112]
-
-    # Calculate how many more units we need
-    units_to_add = total_units - current_units
-    
-    # Iteratively grow units
-    for i in range(1, units_to_add + 1):
-        # layers = (u1 + u2 + u3 + u4) * 2 + 2
+#     for i in range(1, units_to_add + 1):
         
-        if layers in u4_up:
-            u4 += 1
-        elif layers in u1_up:
-            u1 += 1
-        elif i % exp_ratio == 0:
-            u2 += 1
-        else:
-            u3 += 1
-            
-    return {'u1': u1, 'u2': u2, 'u3': u3, 'u4': u4}
+#         progress = i / max(units_to_add, 1)  # 0.0 → 1.0 as layers grow
 
+#         if num_stages == 1:
+#             units['u1'] += 1
+
+#         elif num_stages == 2:
+#             # alternate between u1 and u2
+#             if i % 2 == 0:
+#                 units['u1'] += 1
+#             else:
+#                 units['u2'] += 1
+
+#         elif num_stages == 3:
+#             # u3 gets most, u1 gets some early, u2 fills middle
+#             if progress < 0.2:
+#                 units['u1'] += 1
+#             elif i % exp_ratio == 0:
+#                 units['u2'] += 1
+#             else:
+#                 units['u3'] += 1
+
+#         else:  # num_stages == 4, original intent
+#             # early progress → grow u1 stem
+#             # late progress  → grow u4 tail  
+#             # middle         → grow u2/u3
+#             if progress < 0.15:
+#                 units['u1'] += 1
+#             elif progress > 0.85:
+#                 units['u4'] += 1
+#             elif i % exp_ratio == 0:
+#                 units['u2'] += 1
+#             else:
+#                 units['u3'] += 1
+
+#     return units
+def get_unit_distribution(layers, num_stages=4, exp_ratio=4, starting_units=None):
+    total_units = (layers - 2) // 2
+
+    if starting_units is None:
+        units = {f'u{i+1}': 1 for i in range(num_stages)}
+    else:
+        units = dict(starting_units)
+
+    current_units = sum(units.values())
+    units_to_add = total_units - current_units
+
+    if num_stages == 1:
+        units['u1'] += units_to_add
+        return units
+
+    u4_up = {30, 38, 46, 54, 62, 70, 78, 86, 94, 102}
+    u1_up = {32, 48, 64, 80, 96, 112}
+
+    current_layers = current_units * 2 + 2
+
+    for i in range(1, units_to_add + 1):
+        current_layers += 2
+
+        if num_stages == 4 and current_layers in u4_up:
+            units['u4'] += 1
+        elif num_stages >= 2 and current_layers in u1_up:
+            units['u1'] += 1
+        elif i % exp_ratio == 0:
+            units[f'u{max(1, num_stages - 1)}'] += 1
+        else:
+            # round-robin across middle stages instead of dumping to last
+            mid_stages = list(range(2, num_stages + 1))
+            target = mid_stages[(i - 1) % len(mid_stages)]
+            units[f'u{target}'] += 1
+
+    return units
 
 class BackboneSearchClassifier(nn.Module):
     def __init__(self, units, in_c, num_classes,
@@ -146,16 +188,21 @@ class NetworkMix(nn.Module):
         input_channels = metadata["input_shape"][1]
         num_classes = metadata["num_classes"]
 
-        units = get_unit_distribution(layers)
+        # units = get_unit_distribution(layers)
         # units = get_unit_distribution(layers, starting_units={'u1':2, 'u2':3, 'u3':8, 'u4':2})
         
         num_reductions = red_blcks(metadata["input_shape"])
+         # Dynamic stages based on resolution
+        num_stages = max(1, min(num_reductions + 1, 4))  # 8x8→1, 32x32→2, 128x128→4
+        logging.info("Determined num_reductions = %d, num_stages = %d based on input shape %s", num_reductions, num_stages, str(metadata["input_shape"]))
+        units = get_unit_distribution(layers, num_stages=num_stages)
         self.model = BackboneSearchClassifier(
             units=units,
             in_c=channels,
             num_classes=num_classes,
             input_channels=input_channels,
             num_reductions=num_reductions
+
         )
 
     def forward(self, x):
@@ -170,7 +217,6 @@ class BackboneSearch(nn.Module):
         self.in_c = in_c
 
         logging.info("BackboneSearch: in_c = %d", in_c)
-        logging.info("BackboneSearch: num_reductions = %d", num_reductions)
         logging.info("BackboneSearch: units = %s", str(units))
         logging.info("BackboneSearch: input_channels = %d", input_channels)
 
@@ -184,7 +230,7 @@ class BackboneSearch(nn.Module):
         )
 
         # -------- BODY ----------
-        stage_names = ['u1', 'u2', 'u3', 'u4']
+        stage_names = list(units.keys())  # only ['u1'] or ['u1','u2'] etc.
         downsample_stages = stage_names[:num_reductions]
 
         modules = []
