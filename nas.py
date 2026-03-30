@@ -345,7 +345,7 @@ class NAS:
         logging.info('RUNNING SEARCH on %s', self.metadata['codename'])
 
         #runclock = Clock(total_runtime_seconds)
-
+        self.num_classes = self.metadata['num_classes'] 
         #nas_time_secs = 60#3600*2  # 3 minutes for testing
         max_params = 100_200_000
         
@@ -401,10 +401,10 @@ class NAS:
         # curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
         # curr_arch_train_acc = next_arch_train_acc = 0.0
         # curr_arch_test_acc = next_arch_test_acc = 0.0
-        # CHANGED: Network(channels, 10, layers, criterion) 
+        # CHANGED: Network(channels, self.num_classes, layers, criterion) 
         #          instead of NetworkMix(channels, metadata, layers, ops, kernels)
         criterion = nn.CrossEntropyLoss().to(self.device)
-        model = Network(channels, 10, layers, criterion)
+        model = Network(channels, self.num_classes, layers, criterion)
 
         # model = NetworkMix(channels,self.metadata, layers, curr_arch_ops, curr_arch_kernel)          
         logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
@@ -489,7 +489,7 @@ class NAS:
             # model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)  # Create candidate model
              # CHANGED: Network instead of NetworkMix for param check
             criterion = nn.CrossEntropyLoss().to(self.device)
-            model = Network(channels, 10, layers, criterion)
+            model = Network(channels, self.num_classes, layers, criterion)
             num_params = general_num_params(model)  # Get model parameter count
             logging.info("Model Parameters = %f", num_params)  # Log model size
             # Estimate memory usage: params + activations (rough estimate)
@@ -514,7 +514,7 @@ class NAS:
 
                 logging.info("INITIALIZING RUNNUNG RUN %f", i) 
                  # CHANGED: Network instead of NetworkMix
-                model = Network(channels, 10, layers, nn.CrossEntropyLoss().to(self.device))
+                model = Network(channels, self.num_classes, layers, nn.CrossEntropyLoss().to(self.device))
                 # model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)             
                 next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase1', layers, channels, i)
                 if next_arch_test_acc == 0.0 and next_arch_train_acc == 0.0:
@@ -671,7 +671,7 @@ class NAS:
                 
                 # CHANGED: Network instead of NetworkMix for param log
                 criterion = nn.CrossEntropyLoss().to(self.device)
-                model = Network(channels, 10, layers, criterion)
+                model = Network(channels, self.num_classes, layers, criterion)
 
                 logging.info('Moving to Next Candidate Architecture...')
                 logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
@@ -690,7 +690,7 @@ class NAS:
 
                     logging.info("INITIALIZING RUNNUNG RUN %f", i) 
                      # CHANGED: Network instead of NetworkMix
-                    model = Network(channels, 10, layers, nn.CrossEntropyLoss().to(self.device))           
+                    model = Network(channels, self.num_classes, layers, nn.CrossEntropyLoss().to(self.device))           
 
                     next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase2', layers, channels, i)
 
@@ -836,7 +836,7 @@ class NAS:
         logging.info('Final Layers:    %s', self.f_layers)
 
         # CHANGED: NetworkCIFAR with genotype instead of NetworkMix with ops/kernels
-        model = NetworkCIFAR(self.f_channels, 10, self.f_layers, auxiliary=False, genotype=genotype)
+        model = NetworkCIFAR(self.f_channels, self.num_classes, self.f_layers, auxiliary=False, genotype=genotype)
         return model
 
     def sort_networks(self, d, w, e, t, v, p):
