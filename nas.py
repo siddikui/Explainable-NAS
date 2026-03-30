@@ -2,7 +2,7 @@ import torchvision
 import torch.nn as nn
 import torch
 import torch
-
+import shutil
 from torch import optim
 # CHANGED: import Network and NetworkCIFAR instead of NetworkMix
 from helpers import Network, NetworkCIFAR, show_time, general_num_params, Clock, set_seed, log_lines
@@ -110,7 +110,7 @@ class NAS:
     def get_checkpoint_path(self, layers=None, channels=None, seed=None):
         if layers is not None and channels is not None and seed is not None:
             return f"checkpoints/ckpt_{self.metadata['codename']}_L{layers}_C{channels}_S{seed}.pt"
- 
+
     def save_checkpoint(self, model, epoch, layers, channels, seed):
         print(f"Saving checkpoint for layers={layers}, channels={channels}, seed={seed}")
         path = self.get_checkpoint_path(layers, channels, seed)
@@ -337,39 +337,51 @@ class NAS:
         self.model = best_model
         logging.info("Candidate Evaluation Time: {}".format(show_time(time.time() - t_start)))
         return best_train_acc * 100, best_valid_acc * 100
-
+    
 
     def search_depth_and_width(self):
-        self.search_start = time.time()
-
+        self.search_start = time.time()  # Track search start time for time limit enforcement
+        
         logging.info('RUNNING SEARCH on %s', self.metadata['codename'])
 
-        max_params = 4_200_000
+        #runclock = Clock(total_runtime_seconds)
 
+        #nas_time_secs = 60#3600*2  # 3 minutes for testing
+        max_params = 100_200_000
+        
+        #if self.metadata['input_shape'][2] > 64 or self.metadata['input_shape'][3] > 64:
+        #    width_resolution = 16
         if self.metadata['input_shape'][2] > 32 or self.metadata['input_shape'][3] > 32:
-            width_resolution = 48
+            width_resolution = 16
         else:
-            width_resolution = 64
+            width_resolution = 32
 
-        target_acc = 100
-        min_width = 16
-        max_width = 2048
-        depth_resolution = 2
-        min_depth = 2
-        max_depth = 10
-        max_epochs = 5
+        target_acc= 100
+        min_width=  16
+        max_width= 2048
+        #width_resolution = 64
+        depth_resolution = 1
+        min_depth= 2
+        max_depth= 16
+        self.f_layers = 2
+        self.f_channels = 16
+        max_epochs =4
         Rand_train = 2
-        max_models = 3
+        max_models = 5 #12
         candidate_count = 0
+        
+        r1_thresh = 0.25#0.30
+        r2_thresh = 0.10#0.60
 
-        r1_thresh = 0.25
-        r2_thresh = 0.10
-
-        channels = f_channels = min_width
+        channels = self.f_channels = min_width#16 
         layers = min_depth
+         # CHANGED: removed curr_arch_ops, curr_arch_kernel
+        # replaced with curr_genotype, best_genotype
+        curr_genotype = None
+        best_genotype = None
 
-        add_epochs = 1
-        s_epoch = epochs = 1
+        add_epochs = 1# 1
+        s_epoch = epochs = 1#1
         f_epochs = 0
 
         macro_count = 0
@@ -381,201 +393,253 @@ class NAS:
         bst_vac = []
         bst_prm = []
 
-        # CHANGED: removed curr_arch_ops, curr_arch_kernel
-        # replaced with curr_genotype, best_genotype
-        curr_genotype = None
-        best_genotype = None
 
-        curr_arch_train_acc = next_arch_train_acc = 0.0
-        curr_arch_test_acc  = next_arch_test_acc  = 0.0
 
-        # ── Baseline ─────────────────────────────────────────────────────
+
+        # Baseline Model 
+        # curr_arch_ops = next_arch_ops = np.zeros((layers,), dtype=int)
+        # curr_arch_kernel = next_arch_kernel = 3*np.ones((layers,), dtype=int)
+        # curr_arch_train_acc = next_arch_train_acc = 0.0
+        # curr_arch_test_acc = next_arch_test_acc = 0.0
         # CHANGED: Network(channels, 10, layers, criterion) 
         #          instead of NetworkMix(channels, metadata, layers, ops, kernels)
         criterion = nn.CrossEntropyLoss().to(self.device)
         model = Network(channels, 10, layers, criterion)
+
+        # model = NetworkMix(channels,self.metadata, layers, curr_arch_ops, curr_arch_kernel)          
         logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
         logging.info("Model Parameters = %f", general_num_params(model))
         logging.info('Evaluating Baseline Model...')
-        summary(
-            model.to(self.device),
-            input_size=( 3, 32, 32),
-            device=str(self.device)
-        )
         curr_arch_train_acc, curr_arch_test_acc = self.train(epochs, model, 'baseline', layers, channels, 0)
-        # self.save_checkpoint(model, epochs)
+        # self.save_checkpoint(model, epochs) # Baseline model
         logging.info("Baseline Train Acc %f Baseline Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)
 
-        # CHANGED: extract genotype from baseline model
         curr_genotype = model.genotype()
         best_genotype = curr_genotype
         logging.info('Baseline genotype = %s', curr_genotype)
 
-        # ── Phase 1 ───────────────────────────────────────────────────────
+        # SEARCH MODEL
+        
         layers_up = channels_up = epochs_up = True
 
-        while curr_arch_test_acc < target_acc:
+
+        # Phase 1: Main architecture search
+        while (curr_arch_test_acc < target_acc):
             torch.cuda.empty_cache()
+            # Check if phase 1 time limit is exceeded
             if self.phase1_time_out:
                 self.phase1_time_out = False
                 break
             torch.cuda.empty_cache()
 
-            if curr_arch_train_acc >= 99:
-                break
+            
+            # The possibility exists if trained for too long.
+            if (curr_arch_train_acc >= 99):
+                break;  
 
-            if (layers >= max_depth and channels >= max_width) or epochs >= max_epochs:
-                break
 
-            if layers_up and layers < max_depth:
+            # prepare next candidate architecture.  
+
+            if ((layers >= max_depth and channels >=max_width) or epochs >= max_epochs):
+            #if epochs >= max_epochs:    
+                break;
+                
+            #if channels_up is False and layers_up is False:
+             #   channels_up = True
+            #elif channels_up is True and layers_up is False
+             #   layers_up = True        
+                
+            if layers_up and layers < max_depth:                 
                 layers += depth_resolution
-                channels += int(width_resolution / 2)
+                channels += int(width_resolution/2)
                 layers_up = False
                 channels_up = True
-                macro_count += 1
-
-            elif channels_up and channels < max_width:
-                channels += int(width_resolution / 2)
+                macro_count+=1
+            
+            elif channels_up and channels < max_width:                
+                channels += int(width_resolution/2)
                 channels_up = False
-                epochs_up = True
-                macro_count += 1
+                epochs_up = True 
+                macro_count+=1
 
-            elif epochs_up and epochs < max_epochs:
+            elif epochs_up and epochs < max_epochs:                                
                 epochs = epochs + add_epochs
                 epochs_up = False
                 layers_up = True
                 channels_up = True
 
+
+
             logging.info('#############################################################################')
             logging.info('Moving to Next Candidate Architecture...')
             candidate_count += 1
-            logging.info('Candidate count: %f', candidate_count)
-
+            logging.info('Candidate count: %f',candidate_count)  
+            
             if candidate_count > max_models:
                 logging.info("Maximum Models Evaluated")
-                break
-
+                break;   
+            print("Candidate count: %f",candidate_count)
             logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
 
             archbestt, archbestv = 0.0, 0.0
+            next_arch_ops = np.zeros((layers,), dtype=int)
+            next_arch_kernel = 3*np.ones((layers,), dtype=int)
+            logging.info(f"NetworkMix parameters: channels={channels}, layers={layers}, mixnet_code={next_arch_ops}, k_size={next_arch_kernel}, input_shape={self.metadata.get('input_shape')}, num_classes={self.metadata.get('num_classes')}")
 
-            # CHANGED: Network instead of NetworkMix for param check
+            # model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)  # Create candidate model
+             # CHANGED: Network instead of NetworkMix for param check
             criterion = nn.CrossEntropyLoss().to(self.device)
             model = Network(channels, 10, layers, criterion)
-            num_params = general_num_params(model)
-            logging.info("Model Parameters = %f", num_params)
-
-            if num_params > max_params:
+            num_params = general_num_params(model)  # Get model parameter count
+            logging.info("Model Parameters = %f", num_params)  # Log model size
+            # Estimate memory usage: params + activations (rough estimate)
+            input_shape = self.metadata.get('input_shape', (1, channels, 128, 128))  # Use metadata or default
+            batch_size = self.train_loader.batch_size if hasattr(self.train_loader, 'batch_size') else 16  # Get batch size
+            # Estimate memory: params + activations (float32=4 bytes)
+            param_mem = num_params * 4 / 1024**2  # MB
+            activation_mem = batch_size * np.prod(input_shape[1:]) * 4 / 1024**2  # MB
+            total_mem = param_mem + activation_mem
+            logging.info(f"Estimated GPU/CPU memory usage: params={param_mem:.2f}MB, activations={activation_mem:.2f}MB, total={total_mem:.2f}MB")  # Log memory estimate
+            #log_networkmix_layer_outputs(model, self.metadata)  # Log layer outputs
+            if general_num_params(model) > max_params:
                 logging.info("Model Parameters Exceed Upper Bound")
-                break
-
+                break;
+            self.best_seed = 0
+            # Training same candidate with multiple initializations.    
             for i in range(Rand_train):
                 torch.cuda.empty_cache()
+                    
                 set_seed(i)
-                logging.info("INITIALIZING RUNNING RUN %f", i)
 
-                # CHANGED: Network instead of NetworkMix
+
+                logging.info("INITIALIZING RUNNUNG RUN %f", i) 
+                 # CHANGED: Network instead of NetworkMix
                 model = Network(channels, 10, layers, nn.CrossEntropyLoss().to(self.device))
-                next_arch_train_acc, next_arch_test_acc = self.train(epochs, model, 'phase1', layers, channels, i)
-
+                # model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)             
+                next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase1', layers, channels, i)
                 if next_arch_test_acc == 0.0 and next_arch_train_acc == 0.0:
                     break
                 if next_arch_test_acc > archbestv:
                     archbestt = next_arch_train_acc
                     archbestv = next_arch_test_acc
                     model = self.model
+                    self.best_seed = i 
                     # CHANGED: save genotype of best run
                     best_genotype = model.genotype()
 
-                logging.info("Candidate Train Acc %f Candidate Val Acc %f",
-                             next_arch_train_acc, next_arch_test_acc)
-
+                logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
             if next_arch_test_acc == 0.0 and next_arch_train_acc == 0.0:
                 break
-
+            # As long as we get significant improvement by increasing depth.
+            
             next_arch_train_acc = archbestt
-            next_arch_test_acc  = archbestv
-            logging.info("Candidate Best Train %f Candidate Best Val %f",
-                         next_arch_train_acc, next_arch_test_acc)
+            next_arch_test_acc = archbestv
+            logging.info("Candidate Best Train %f Candidate Best Val %f", next_arch_train_acc, next_arch_test_acc)
 
-            if next_arch_test_acc > curr_arch_test_acc + r1_thresh:
+            if (next_arch_test_acc > curr_arch_test_acc + r1_thresh):
+                '''
+                if layers_up is False:
+                    if channels_up is False:
+                        #layers_up =True    
+                        channels_up = True
+                    else:
+                        layers_up =True    
+                        #channels_up = True
+                '''
                 if channels_up is True and layers_up is False:
                     layers_up = True
                 elif channels_up is False and layers_up is False:
                     channels_up = True
-
-                logging.info("Train Acc Diff %f Val Acc Diff %f",
-                             next_arch_train_acc - curr_arch_train_acc,
-                             next_arch_test_acc  - curr_arch_test_acc)
+                #if layers_up is False:
+                #    layers_up = True
+                # update current architecture.
+                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
                 curr_arch_train_acc = next_arch_train_acc
-                curr_arch_test_acc  = next_arch_test_acc
-                f_channels = channels
-                f_epochs   = epochs
-                s_epoch    = self.best_epoch
-
+                curr_arch_test_acc = next_arch_test_acc
+                curr_arch_ops = next_arch_ops
+                self.f_layers = layers          # ← direct, not len(curr_arch_ops)
+                curr_arch_kernel = next_arch_kernel
+                self.f_channels = channels
+                f_epochs = epochs
+                s_epoch = self.best_epoch
                 # CHANGED: update accepted genotype
                 curr_genotype = best_genotype
+                #self.save_checkpoint(model, epochs)
 
-                # self.save_checkpoint(model, self.best_epoch)
-                logging.info("Highest Train Acc %f Highest Val Acc %f",
-                             curr_arch_train_acc, curr_arch_test_acc)
-
+                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
+                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
+                
                 bst_dep.append(layers)
                 bst_wdt.append(channels)
                 bst_epc.append(epochs)
-                bst_tac.append(round(next_arch_train_acc, 2))
-                bst_vac.append(round(next_arch_test_acc,  2))
+                bst_tac.append(round(next_arch_train_acc,2))
+                bst_vac.append(round(next_arch_test_acc,2))
                 bst_prm.append(general_num_params(model))
 
-                logging.info('Best Arch Layers: %s',    bst_dep)
-                logging.info('Best Arch Channels: %s',  bst_wdt)
-                logging.info('Best Arch Epochs: %s',    bst_epc)
+                logging.info('Best Arch Layers: %s', bst_dep)
+                logging.info('Best Arch Channels: %s', bst_wdt)
+                logging.info('Best Arch Epochs: %s', bst_epc)
                 logging.info('Best Arch Train Acc: %s', bst_tac)
-                logging.info('Best Arch Val Acc: %s',   bst_vac)
-                logging.info('Best Arch Params: %s',    bst_prm)
+                logging.info('Best Arch Val Acc: %s', bst_vac)
+                logging.info('Best Arch Params: %s', bst_prm)
+
+
 
             else:
-                logging.info("Highest Train Acc %f Highest Val Acc %f",
-                             curr_arch_train_acc, curr_arch_test_acc)
-                logging.info("Train Acc Diff %f Val Acc Diff %f",
-                             next_arch_train_acc - curr_arch_train_acc,
-                             next_arch_test_acc  - curr_arch_test_acc)
+                logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
+                logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
                 continue
+        # Search width
+        # During width search lenght of curr_arch_ops and curr_arch_kernel shall not change but only channels.
 
-        # CHANGED: f_layers from layers directly (no curr_arch_ops array)
-        f_layers = layers
+        # self.f_layers = len(curr_arch_ops) # discovered final number of layers
 
-        logging.info('Discovered Depth %s',   f_layers)
-        logging.info('Discovered Width %s',   f_channels)
+
+        logging.info('Discovered Depth %s', self.f_layers)
+        logging.info('Discovered Width %s', self.f_channels)
         logging.info('Discovered Epochs %s best saved epoch %s', f_epochs, s_epoch)
-        logging.info('Discovered Genotype %s', curr_genotype)
+
 
         logging.info('#############################################################################')
-        logging.info('Best Arch Layers: %s',    bst_dep)
-        logging.info('Best Arch Channels: %s',  bst_wdt)
-        logging.info('Best Arch Epochs: %s',    bst_epc)
+        logging.info('#############################################################################')
+        logging.info('Best Arch Layers: %s', bst_dep)
+        logging.info('Best Arch Channels: %s', bst_wdt)
+        logging.info('Best Arch Epochs: %s', bst_epc)
         logging.info('Best Arch Train Acc: %s', bst_tac)
-        logging.info('Best Arch Val Acc: %s',   bst_vac)
-        logging.info('Best Arch Params: %s',    bst_prm)
+        logging.info('Best Arch Val Acc: %s', bst_vac)
+        logging.info('Best Arch Params: %s', bst_prm)
         logging.info('#############################################################################')
+        logging.info('#############################################################################')
+        logging.info('')  
 
-        # ── Phase 2 ───────────────────────────────────────────────────────
-        Rand_train = 5
+        ###################################################################################
+        ###################################################################################
+        ########### HYPER PARAMETER SEARCH BEGINS ############################
+
+        Rand_train = 2
         candidate_count = 0
-
-        self.search_end = time.time()
+        # Phase 2: Hyperparameter search/refinement
+        
+        self.search_end = time.time()  # Track search start time for time limit enforcement
+        
         phase1_time = self.search_end - self.search_start
         logging.info(f"Phase 1 Search Time: {phase1_time})")
+        
 
+
+        
         self.phase2_time_limit = self.total_time_limit - phase1_time
         self.phase2_time_limit -= self.extra_time
-        logging.info(f"Phase 2 Allocated Time: {self.phase2_time_limit})")
 
+        logging.info(f"Phase 2 Allocated Time: {self.phase2_time_limit})")
+        
+        
+        
         while len(bst_dep) > 1:
+            # Check if phase 2 time limit is exceeded
             if self.phase2_time_out:
                 self.phase2_time_out = False
                 break
-
             bst_dep_2 = []
             bst_wdt_2 = []
             bst_epc_2 = []
@@ -585,18 +649,26 @@ class NAS:
 
             if candidate_count > max_models:
                 break
-
             for i in range(len(bst_dep)):
-                layers   = bst_dep[len(bst_dep) - 2 - i]
-                channels = bst_wdt[len(bst_wdt) - 2 - i]
+                layers = bst_dep[len(bst_dep)-2-i]
+                channels = bst_wdt[len(bst_wdt)-2-i]
+
+                if layers <= 8:
+                    pass
 
                 if i == 0:
-                    epochs = max(f_epochs, bst_epc[len(bst_epc) - 1]) + 1
+                    epochs = max(f_epochs,bst_epc[len(bst_epc)-1]) + 1
                 else:
+                    #epochs = bst_epc[len(bst_epc)-1] + i + 1
                     epochs = epochs + 1
+                if epochs > max_epochs:
+                    epochs = max_epochs
+                archbestt, archbestv = 0.0, 0.0                
 
-                archbestt, archbestv = 0.0, 0.0
-
+                # next_arch_ops = np.zeros((layers,), dtype=int)
+                # next_arch_kernel = 3*np.ones((layers,), dtype=int)
+                # model = NetworkMix(channels,self.metadata, layers, next_arch_ops, next_arch_kernel)                             
+                
                 # CHANGED: Network instead of NetworkMix for param log
                 criterion = nn.CrossEntropyLoss().to(self.device)
                 model = Network(channels, 10, layers, criterion)
@@ -604,146 +676,227 @@ class NAS:
                 logging.info('Moving to Next Candidate Architecture...')
                 logging.info("Model Depth %s Model Width %s Train Epochs %s", layers, channels, epochs)
                 logging.info("Model Parameters = %f", general_num_params(model))
+                #log_networkmix_layer_outputs(model, self.metadata)
 
-                for j in range(Rand_train):
+
+
+                for i in range(Rand_train):
                     torch.cuda.empty_cache()
-                    if self.phase2_time_limit is not None and \
-                       (time.time() - self.search_end) > self.phase2_time_limit:
-                        logging.info(f"Phase 2 time limit exceeded. Stopping.")
+                    if self.phase2_time_limit is not None and (time.time() - self.search_end) > self.phase2_time_limit:
+                        logging.info(f"Phase 2 (hyperparameter search) time limit of {self.phase2_time_limit/60:.2f} min exceeded. Stopping search.")
                         break
+                    set_seed(i)
 
-                    set_seed(j)
-                    logging.info("INITIALIZING RUNNING RUN %f", j)
 
-                    # CHANGED: Network instead of NetworkMix
-                    model = Network(channels, 10, layers, nn.CrossEntropyLoss().to(self.device))
-                    next_arch_train_acc, next_arch_test_acc = self.train(epochs, model, 'phase2', layers, channels, j)
+                    logging.info("INITIALIZING RUNNUNG RUN %f", i) 
+                     # CHANGED: Network instead of NetworkMix
+                    model = Network(channels, 10, layers, nn.CrossEntropyLoss().to(self.device))           
+
+                    next_arch_train_acc, next_arch_test_acc  = self.train(epochs,model,'phase2', layers, channels, i)
 
                     if next_arch_test_acc > archbestv:
                         archbestt = next_arch_train_acc
                         archbestv = next_arch_test_acc
-                        model = self.model
-                        # CHANGED: save genotype of best run
-                        best_genotype = model.genotype()
+                        self.best_model = self.model
+                        self.best_seed = i
 
-                    logging.info("Candidate Train Acc %f Candidate Val Acc %f",
-                                 next_arch_train_acc, next_arch_test_acc)
-
+                    logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
+            
+            
+            
                 next_arch_train_acc = archbestt
-                next_arch_test_acc  = archbestv
-                logging.info("Candidate Best Train %f Candidate Best Val %f",
-                             next_arch_train_acc, next_arch_test_acc)
+                next_arch_test_acc = archbestv
+                logging.info("Candidate Best Train %f Candidate Best Val %f", next_arch_train_acc, next_arch_test_acc)
 
                 candidate_count += 1
 
-                if next_arch_test_acc > curr_arch_test_acc + r2_thresh:
-                    # self.save_checkpoint(model, self.best_epoch)
 
-                    f_layers   = layers
-                    f_channels = channels
-                    f_epochs   = epochs
+                if (next_arch_test_acc > curr_arch_test_acc + r2_thresh):
 
-                    # CHANGED: update accepted genotype
-                    curr_genotype = best_genotype
+                    # update current architecture.
+                    curr_arch_ops = next_arch_ops
+                    curr_arch_kernel = next_arch_kernel
+                    self.f_layers = layers       
 
-                    logging.info("Candidate Train Acc %f Candidate Val Acc %f",
-                                 next_arch_train_acc, next_arch_test_acc)
-                    logging.info("Highest Train Acc %f Highest Val Acc %f",
-                                 curr_arch_train_acc, curr_arch_test_acc)
-
-                    curr_arch_train_acc = next_arch_train_acc
-                    curr_arch_test_acc  = next_arch_test_acc
+                    logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
+                    logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
+                    logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
+                    
+                    curr_arch_train_acc = next_arch_train_acc                
+                    curr_arch_test_acc = next_arch_test_acc
 
                     bst_dep_2.append(layers)
                     bst_wdt_2.append(channels)
                     bst_epc_2.append(epochs)
-                    bst_tac_2.append(round(next_arch_train_acc, 2))
-                    bst_vac_2.append(round(next_arch_test_acc,  2))
-                    bst_prm_2.append(general_num_params(model))
+                    bst_tac_2.append(round(next_arch_train_acc,2))
+                    bst_vac_2.append(round(next_arch_test_acc,2))
+                    bst_prm_2.append(general_num_params(self.best_model))
 
-                    logging.info('Best Arch Layers: %s',    bst_dep_2)
-                    logging.info('Best Arch Channels: %s',  bst_wdt_2)
-                    logging.info('Best Arch Epochs: %s',    bst_epc_2)
+                    logging.info('Best Arch Layers: %s', bst_dep_2)
+                    logging.info('Best Arch Channels: %s', bst_wdt_2)
+                    logging.info('Best Arch Epochs: %s', bst_epc_2)
                     logging.info('Best Arch Train Acc: %s', bst_tac_2)
-                    logging.info('Best Arch Val Acc: %s',   bst_vac_2)
-                    logging.info('Best Arch Params: %s',    bst_prm_2)
+                    logging.info('Best Arch Val Acc: %s', bst_vac_2)
+                    logging.info('Best Arch Params: %s', bst_prm_2)
 
                 else:
-                    logging.info("Candidate Train Acc %f Candidate Val Acc %f",
-                                 next_arch_train_acc, next_arch_test_acc)
-                    logging.info("Highest Train Acc %f Highest Val Acc %f",
-                                 curr_arch_train_acc, curr_arch_test_acc)
-
+                    logging.info("Candidate Train Acc %f Candidate Val Acc %f", next_arch_train_acc, next_arch_test_acc)
+                    logging.info("Highest Train Acc %f Highest Val Acc %f", curr_arch_train_acc, curr_arch_test_acc)                        
+                    logging.info("Train Acc Diff %f Val Acc Diff %f", next_arch_train_acc-curr_arch_train_acc, next_arch_test_acc-curr_arch_test_acc)
                 logging.info('#############################################################################')
 
-            bst_dep = bst_dep_2
-            bst_wdt = bst_wdt_2
-            bst_epc = bst_epc_2
-            bst_tac = bst_tac_2
-            bst_vac = bst_vac_2
-            bst_prm = bst_prm_2
+            # CHANGE: only replace if something improved this pass
+            if len(bst_dep_2) > 0:
+                bst_dep = bst_dep_2
+                bst_wdt = bst_wdt_2
+                bst_epc = bst_epc_2
+                bst_tac = bst_tac_2
+                bst_vac = bst_vac_2
+                bst_prm = bst_prm_2
+                bst_dep, bst_wdt, bst_epc, bst_tac, bst_vac, bst_prm = \
+                    self.sort_networks(bst_dep, bst_wdt, bst_epc, bst_tac, bst_vac, bst_prm)
+            else:
+                logging.info("No improvement this pass — stopping Phase 2 refinement.")
+                logging.info(f"Keeping best from previous pass: {bst_dep}")
+                break
 
-            bst_dep, bst_wdt, bst_epc, bst_tac, bst_vac, bst_prm = self.sort_networks(
-                bst_dep, bst_wdt, bst_epc, bst_tac, bst_vac, bst_prm)
+            bst_dep,bst_wdt,bst_epc,bst_tac,bst_vac,bst_prm = self.sort_networks(bst_dep,bst_wdt,bst_epc,bst_tac,bst_vac,bst_prm)
 
-            logging.info('Best Arch Layers: %s',    bst_dep)
-            logging.info('Best Arch Channels: %s',  bst_wdt)
-            logging.info('Best Arch Epochs: %s',    bst_epc)
+
+            logging.info('Best Arch Layers: %s', bst_dep)
+            logging.info('Best Arch Channels: %s', bst_wdt)
+            logging.info('Best Arch Epochs: %s', bst_epc)
             logging.info('Best Arch Train Acc: %s', bst_tac)
-            logging.info('Best Arch Val Acc: %s',   bst_vac)
-            logging.info('Best Arch Params: %s',    bst_prm)
+            logging.info('Best Arch Val Acc: %s', bst_vac)
+            logging.info('Best Arch Params: %s', bst_prm)
+            
+            ###################################################################################
+            ###################################################################################
+            ########### HYPER PARAMETER SEARCH ENDS ############################
+        logging.info('Discovered Final Depth %s', self.f_layers)
+        logging.info('Discovered Final Width %s', self.f_channels)
+        logging.info('Discovered Final Epochs %s', f_epochs)
 
-        logging.info('Discovered Final Depth %s',    f_layers)
-        logging.info('Discovered Final Width %s',    f_channels)
-        logging.info('Discovered Final Epochs %s',   f_epochs)
-        logging.info('Discovered Final Genotype %s', curr_genotype)
+        log_lines(10)
+        
+        phase2_time_taken = time.time() - self.search_end
+        logging.info(f"Phase 2 Taken Time: {phase2_time_taken})")
 
+        final_ckpt = self.get_checkpoint_path(
+            layers=self.f_layers,
+            channels=self.f_channels,
+            seed=self.best_seed
+        )
+        print("Final checkpoint path:", final_ckpt)
+        dst = os.path.join(
+            os.path.dirname(final_ckpt),  # current folder
+            "..",                         # go up one level
+            self.metadata["codename"] + ".pth"
+        )
+
+        dst = os.path.abspath(dst)
+        shutil.copyfile(final_ckpt, dst)
+
+        print("Copied and renamed to:", dst)
         log_lines(10)
 
         phase2_time_taken = time.time() - self.search_end
         logging.info(f"Phase 2 Taken Time: {phase2_time_taken})")
 
         # CHANGED: return genotype instead of ops/kernel arrays
-        return curr_genotype, f_channels, f_layers
+        return curr_genotype, self.f_channels, self.f_layers
 
+    """
+    ====================================================================================================================
+    SEARCH =============================================================================================================
+    ====================================================================================================================
+    The search function is called with no arguments, and expects a PyTorch model as output. Use this to
+    perform your architecture search. 
+
+    """
 
     def evaluate(self):
-        # UNCHANGED
         self.model.eval()
         labels, predictions = [], []
         for data, target in self.valid_loader:
+            #data = data.to(self.device)
             data = data.cuda(non_blocking=True)
             output = self.model.forward(data)
             labels += target.cpu().tolist()
             predictions += torch.argmax(output, 1).detach().cpu().tolist()
         return accuracy_score(labels, predictions)
 
-    # def save_checkpoint(self, model, epoch):
-    #     # UNCHANGED
-    #     torch.save({
-    #         'epoch': epoch,
-    #         'model_state_dict': model.state_dict(),
-    #         'optimizer_state_dict': self.optimizer.state_dict(),
-    #     }, self.metadata["codename"]+".pth")
-    #     print(f"Checkpoint saved to {self.metadata['codename']}.pth")
 
     def search(self):
         # CHANGED: 3 return values, NetworkCIFAR with genotype
-        genotype, f_channels, f_layers = self.search_depth_and_width()
+        genotype, self.f_channels, self.f_layers = self.search_depth_and_width()
 
         logging.info('Final Genotype:  %s', genotype)
-        logging.info('Final Channels:  %s', f_channels)
-        logging.info('Final Layers:    %s', f_layers)
+        logging.info('Final Channels:  %s', self.f_channels)
+        logging.info('Final Layers:    %s', self.f_layers)
 
         # CHANGED: NetworkCIFAR with genotype instead of NetworkMix with ops/kernels
-        model = NetworkCIFAR(f_channels, 10, f_layers, auxiliary=False, genotype=genotype)
+        model = NetworkCIFAR(self.f_channels, 10, self.f_layers, auxiliary=False, genotype=genotype)
         return model
 
     def sort_networks(self, d, w, e, t, v, p):
-        # UNCHANGED
-        if len(d) == 0:
-            return d, w, e, t, v, p
+
+        if len(d)==0:
+            return d,w,e,t,v,p
+        # Sorting all lists based on the sorted order of list1
         combined = list(zip(d, w, e, t, v, p))
+
+        # Sort based on the first list (list1)
         combined_sorted = sorted(combined, key=lambda x: x[5])
+
+        # Unzip the sorted combined list to separate the lists
         d, w, e, t, v, p = zip(*combined_sorted)
-        return list(d), list(w), list(e), list(t), list(v), list(p)
+
+        # Convert them back to lists (since zip() returns tuples)
+        d = list(d)
+        w = list(w)
+        e = list(e)
+        t = list(t)
+        v = list(v)
+        p = list(p)
+
+        return d,w,e,t,v,p
+
+def log_networkmix_layer_outputs(model, metadata=None):
+    # Log the output shapes of each layer using torch tensors instead of torchinfo.summary
+    try:
+        model.eval()
+        if metadata is not None and 'input_shape' in metadata:
+            input_shape = metadata['input_shape'][1:]  # skip batch dim
+        else:
+            input_shape = (model.stem[0].in_channels, 128, 128)  # fallback
+        dummy = torch.zeros((1, *input_shape)).to(next(model.parameters()).device)
+        logging.info(f"Input shape: {dummy.shape}")
+        hooks = []
+        layer_outputs = {}
+        def hook_fn(name):
+            def fn(module, inp, out):
+                layer_outputs[name] = out.shape if hasattr(out, 'shape') else str(type(out))
+            return fn
+        for name, module in model.named_modules():
+            if name == '':
+                continue  # skip the root module
+            hooks.append(module.register_forward_hook(hook_fn(name)))
+        with torch.no_grad():
+            _ = model(dummy)
+        for name, shape in layer_outputs.items():
+            logging.info(f"Layer: {name}, Output shape: {shape}")
+        for h in hooks:
+            h.remove()
+    except Exception as e:
+        logging.info(f" Failed to log layer outputs: {e}")
+    # torchinfo.summary is commented out
+    # try:
+    #     from torchinfo import summary
+    #     if metadata is not None and 'input_shape' in metadata:
+    #         input_shape = metadata['input_shape'][1:]  # skip batch dim
+    #     else:
+    #         input_shape = (model.stem[0].in_channels, 128, 128)  # fallback
+    #     logging.info(str(summary(model, input_size=(1, *input_shape), depth=3)))  # Print model summary
+    # except Exception:
+    #     logging.info("torchinfo.summary not available or failed.")

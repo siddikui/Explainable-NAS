@@ -92,9 +92,9 @@ PRIMITIVES = [
     'avg_pool_3x3',
     'skip_connect',
     'sep_conv_3x3',
-    'sep_conv_5x5',
+    # 'sep_conv_5x5',
     'dil_conv_3x3',
-    'dil_conv_5x5'
+    # 'dil_conv_5x5'
 ]
 
 def drop_path(x, drop_prob):
@@ -290,7 +290,7 @@ class DilConv(nn.Module):
 
 class Network(nn.Module):
 
-  def __init__(self, C, num_classes, layers, criterion, steps=4, multiplier=4, stem_multiplier=3):
+  def __init__(self, C, num_classes, layers, criterion, steps=2, multiplier=2, stem_multiplier=2):
     super(Network, self).__init__()
     self._C = C
     self._num_classes = num_classes
